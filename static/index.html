@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hayagriva — The local repository of knowledge.</title>
+    <!-- Google Fonts: Cormorant Garamond (Luxury Serif), Inter (Clean Sans-Serif), JetBrains Mono (Precision Monospace) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Radial Grid Overlay & Monolithic Ambient Amber Glow -->
+    <div class="monolith-grid"></div>
+    <div class="monolith-glow"></div>
+    
+    <div class="luxury-app-frame">
+        <!-- Sidebar: The Codex Index -->
+        <aside class="codex-sidebar">
+            <div class="sidebar-top">
+                <div class="brand-monogram">
+                    <i class="fa-solid fa-horse-head monogram-icon"></i>
+                    <div class="brand-title">
+                        <h2>H A Y A G R I V A</h2>
+                        <span class="brand-sub">ANALYTICAL KNOWLEDGE ENGINE</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Monolithic Status Indicator -->
+            <div class="oracle-status-card">
+                <div class="status-indicator">
+                    <span class="pulse-dot"></span>
+                    <span id="mode-text">SEARCHING STATE...</span>
+                </div>
+                <div class="model-meta-info" id="model-text">Connecting to models...</div>
+            </div>
+
+            <!-- Ingest Trigger and Documents -->
+            <div class="document-section">
+                <div class="section-header">
+                    <h3>INDEXED TEXTS</h3>
+                    <button class="btn-action-refresh" id="refresh-docs-btn" title="Re-scan index"><i class="fa-solid fa-rotate"></i></button>
+                </div>
+                <ul class="scroll-catalog" id="doc-list">
+                    <li class="catalog-empty">Index empty.</li>
+                </ul>
+            </div>
+
+            <!-- Drag & Drop Upload Zone -->
+            <div class="codex-dropzone" id="dropzone">
+                <i class="fa-solid fa-cloud-arrow-up dropzone-icon"></i>
+                <span class="dropzone-text">DRAG & DROP SCROLL</span>
+                <span class="dropzone-subtext">PDF, TXT, or MD</span>
+                <input type="file" id="file-uploader" accept=".pdf,.txt,.md" class="hidden">
+            </div>
+
+            <div class="sidebar-bottom">
+                <button class="btn-luxury-ingest" id="ingest-btn">
+                    <span class="btn-txt"><i class="fa-solid fa-feather-pointed"></i> SCAN DIRECTORY</span>
+                    <span class="btn-loader hidden" id="ingest-spinner"><i class="fa-solid fa-circle-notch fa-spin"></i></span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Codex Scroll -->
+        <main class="codex-viewport">
+            <header class="codex-header">
+                <div class="header-meta">
+                    <span class="mono-label">SESSION ORACLE LOG</span>
+                    <span class="mono-value" id="session-hash">HSX-2026-620</span>
+                </div>
+                <div class="header-actions">
+                    <button class="btn-luxury-action" id="clear-btn" title="Purge Codex Memory"><i class="fa-solid fa-trash-can"></i> PURGE MEMORY</button>
+                </div>
+            </header>
+
+            <div class="manuscript-scroller" id="chat-messages">
+                <!-- Welcome Manuscript -->
+                <div class="manuscript-entry assistant-entry init-msg">
+                    <div class="manuscript-body">
+                        <p class="editorial-lead">Welcome to the repository.</p>
+                        <p>I am <strong>Hayagriva</strong>, an analytical orchestration engine built on Immanuel Kant’s philosophical frameworks. I retrieve knowledge through a four-stage hybrid RAG pipeline (BM25 ensemble & Cross-Encoder relevance re-ranking).</p>
+                        <p>Begin by posing a query below. The generated answers will link directly to verified paragraphs in the parsed scrolls.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Minimalist Typing Indicator -->
+            <div class="oracle-thinking-indicator hidden" id="typing-indicator">
+                <div class="thinking-loader">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                <span class="thinking-txt">Consulting the corpus...</span>
+            </div>
+
+            <!-- Input deck -->
+            <div class="codex-input-deck">
+                <form id="chat-form" class="codex-input-form">
+                    <input type="text" id="user-input" placeholder="Submit a query to the corpus (e.g. 'What is Kant\'s concept of duty?')..." autocomplete="off" required>
+                    <button type="submit" class="btn-codex-send" id="send-btn" title="Submit query">
+                        <i class="fa-solid fa-chevron-right"></i>
+                    </button>
+                </form>
+            </div>
+        </main>
+
+        <!-- Annotation / Exegesis Slide-out Drawer -->
+        <div class="exegesis-overlay" id="citation-overlay"></div>
+        <div class="exegesis-panel" id="citation-drawer">
+            <div class="exegesis-header">
+                <div class="exegesis-header-title">
+                    <span class="mono-label">SOURCE REFERENCE</span>
+                    <h3>EXEGESIS ANNOTATION</h3>
+                </div>
+                <button class="btn-close-exegesis" id="close-drawer-btn">&times;</button>
+            </div>
+            <div class="exegesis-content">
+                <div class="exegesis-meta-grid">
+                    <div class="meta-block">
+                        <span class="meta-label">SOURCE FILE</span>
+                        <span class="meta-val" id="citation-source-doc">-</span>
+                    </div>
+                    <div class="meta-row-half">
+                        <div class="meta-block">
+                            <span class="meta-label">PAGE NO.</span>
+                            <span class="meta-val" id="citation-page">-</span>
+                        </div>
+                        <div class="meta-block">
+                            <span class="meta-label">RELEVANCE VALUE</span>
+                            <span class="meta-val highlight" id="citation-score">-</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="exegesis-body">
+                    <span class="meta-label">VERBATIM SNIPPET</span>
+                    <blockquote class="exegesis-quote" id="citation-text">-</blockquote>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script File -->
+    <script src="/static/app.js"></script>
+</body>
+</html>

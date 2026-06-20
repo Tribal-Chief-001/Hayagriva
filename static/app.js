@@ -1,0 +1,444 @@
+// ==========================================================================
+// Hayagriva SOTA Editorial Client Logic
+// ==========================================================================
+
+document.addEventListener("DOMContentLoaded", () => {
+    // Generate a unique session ID for conversation memory
+    let sessionId = generateUUID();
+    
+    // UI Elements
+    const systemMode = document.getElementById("system-mode");
+    const modeText = document.getElementById("mode-text");
+    const modelText = document.getElementById("model-text");
+    const docList = document.getElementById("doc-list");
+    const refreshDocsBtn = document.getElementById("refresh-docs-btn");
+    const ingestBtn = document.getElementById("ingest-btn");
+    const ingestSpinner = document.getElementById("ingest-spinner");
+    const clearBtn = document.getElementById("clear-btn");
+    const chatMessages = document.getElementById("chat-messages");
+    const typingIndicator = document.getElementById("typing-indicator");
+    const chatForm = document.getElementById("chat-form");
+    const userInput = document.getElementById("user-input");
+    const sendBtn = document.getElementById("send-btn");
+    const sessionHashEl = document.getElementById("session-hash");
+    
+    // Dropzone Elements
+    const dropzone = document.getElementById("dropzone");
+    const fileUploader = document.getElementById("file-uploader");
+    
+    // Citation Drawer Elements
+    const citationOverlay = document.getElementById("citation-overlay");
+    const citationDrawer = document.getElementById("citation-drawer");
+    const closeDrawerBtn = document.getElementById("close-drawer-btn");
+    const citationSourceDoc = document.getElementById("citation-source-doc");
+    const citationPage = document.getElementById("citation-page");
+    const citationScore = document.getElementById("citation-score");
+    const citationText = document.getElementById("citation-text");
+
+    // Initialize Page & Session Monogram
+    updateSessionMonogram();
+    fetchSystemStatus();
+    fetchDocuments();
+
+    // ----------------------------------------------------
+    // Drag and Drop Upload Event Listeners
+    // ----------------------------------------------------
+    
+    // Click on dropzone triggers file dialog
+    dropzone.addEventListener("click", () => {
+        fileUploader.click();
+    });
+
+    // File selected from dialog
+    fileUploader.addEventListener("change", (e) => {
+        if (e.target.files.length > 0) {
+            handleFileUpload(e.target.files[0]);
+        }
+    });
+
+    // Drag-over hover effects
+    ["dragenter", "dragover"].forEach(eventName => {
+        dropzone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.add("dragover");
+        }, false);
+    });
+
+    ["dragleave", "drop"].forEach(eventName => {
+        dropzone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropzone.classList.remove("dragover");
+        }, false);
+    });
+
+    // Drop file trigger
+    dropzone.addEventListener("drop", (e) => {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        if (files.length > 0) {
+            handleFileUpload(files[0]);
+        }
+    });
+
+    // ----------------------------------------------------
+    // Ingest and Button Event Listeners
+    // ----------------------------------------------------
+    
+    // Ingest Directory Trigger (Local scanning backup)
+    ingestBtn.addEventListener("click", async () => {
+        ingestBtn.disabled = true;
+        ingestSpinner.classList.remove("hidden");
+        
+        try {
+            const res = await fetch("/api/ingest", { method: "POST" });
+            const data = await res.json();
+            
+            if (data.status === "success") {
+                const numIngested = data.ingested.length;
+                const numSkipped = data.skipped.length;
+                alert(`Ingestion Successful!\nIndexed: ${numIngested} files\nSkipped (unchanged): ${numSkipped} files`);
+                fetchDocuments();
+            } else {
+                alert("Ingestion failed: " + data.message);
+            }
+        } catch (err) {
+            console.error(err);
+            alert("Error sending ingestion request.");
+        } finally {
+            ingestBtn.disabled = false;
+            ingestSpinner.classList.add("hidden");
+        }
+    });
+
+    // Refresh Documents List
+    refreshDocsBtn.addEventListener("click", fetchDocuments);
+
+    // Clear Chat History & reset session
+    clearBtn.addEventListener("click", () => {
+        if (confirm("Are you sure you want to purge the current scroll? This resets the server memory.")) {
+            sessionId = generateUUID();
+            updateSessionMonogram();
+            
+            // Keep welcoming block only
+            const welcome = chatMessages.querySelector(".init-msg");
+            chatMessages.innerHTML = "";
+            if (welcome) {
+                chatMessages.appendChild(welcome);
+            }
+        }
+    });
+
+    // Submit Query
+    chatForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const queryText = userInput.value.trim();
+        if (!queryText) return;
+
+        // Clear and lock input
+        userInput.value = "";
+        userInput.disabled = true;
+        sendBtn.disabled = true;
+
+        // Append User Query
+        appendMessage("user", queryText);
+        
+        // Show Typing Indicator
+        typingIndicator.classList.remove("hidden");
+        scrollToBottom();
+
+        try {
+            await executeStreamingQuery(queryText);
+        } catch (err) {
+            console.error("Stream error: ", err);
+            appendMessage("assistant", "Apologies, but an issue occurred while querying the server stream.");
+            typingIndicator.classList.add("hidden");
+        } finally {
+            userInput.disabled = false;
+            sendBtn.disabled = false;
+            userInput.focus();
+        }
+    });
+
+    // Close Citation Drawer
+    closeDrawerBtn.addEventListener("click", closeDrawer);
+    citationOverlay.addEventListener("click", closeDrawer);
+
+    // ----------------------------------------------------
+    // API Calls & Logic
+    // ----------------------------------------------------
+    
+    function updateSessionMonogram() {
+        if (sessionHashEl) {
+            sessionHashEl.textContent = "HSX-" + sessionId.split("-")[0].toUpperCase();
+        }
+    }
+
+    async function fetchSystemStatus() {
+        try {
+            const res = await fetch("/api/status");
+            const data = await res.json();
+            
+            modeText.textContent = data.mode.toUpperCase();
+            modelText.innerHTML = `LLM: <code>${data.config.llm_model}</code><br>Embeddings: <code>${data.config.embeddings}</code>`;
+        } catch (err) {
+            console.error("Error fetching system status:", err);
+            modeText.textContent = "SYSTEM OFFLINE";
+        }
+    }
+
+    async function fetchDocuments() {
+        docList.innerHTML = "<li class='loading-item'>Loading catalog...</li>";
+        try {
+            const res = await fetch("/api/documents");
+            const data = await res.json();
+            
+            docList.innerHTML = "";
+            if (!data.documents || data.documents.length === 0) {
+                docList.innerHTML = "<li class='catalog-empty'>No texts indexed.</li>";
+                return;
+            }
+
+            data.documents.forEach(doc => {
+                const li = document.createElement("li");
+                li.className = "doc-item";
+                li.innerHTML = `
+                    <i class="fa-regular fa-file-pdf"></i>
+                    <span class="doc-name" title="${doc.filename}">${doc.filename}</span>
+                    <span class="doc-hash">${doc.hash}</span>
+                `;
+                docList.appendChild(li);
+            });
+        } catch (err) {
+            console.error("Error loading documents:", err);
+            docList.innerHTML = "<li class='catalog-empty'>Failed to load index.</li>";
+        }
+    }
+
+    // Handles the async uploading of files to the backend
+    async function handleFileUpload(file) {
+        // Simple file type check
+        const allowedExtensions = /(\.pdf|\.txt|\.md)$/i;
+        if (!allowedExtensions.exec(file.name)) {
+            alert("Error: Unsupported file format. Please upload a .pdf, .txt, or .md file.");
+            return;
+        }
+
+        // Show loading state inside the dropzone
+        const originalIcon = dropzone.querySelector(".dropzone-icon").className;
+        const originalText = dropzone.querySelector(".dropzone-text").textContent;
+        const originalSubtext = dropzone.querySelector(".dropzone-subtext").textContent;
+
+        dropzone.querySelector(".dropzone-icon").className = "fa-solid fa-spinner fa-spin dropzone-icon";
+        dropzone.querySelector(".dropzone-text").textContent = "INDEXING SCROLL...";
+        dropzone.querySelector(".dropzone-subtext").textContent = file.name;
+        dropzone.style.pointerEvents = "none";
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const response = await fetch("/api/upload", {
+                method: "POST",
+                body: formData
+            });
+            const data = await response.json();
+
+            if (data.status === "success") {
+                alert(`File '${file.name}' indexed successfully!\nGenerated: ${data.chunks} child vectors.`);
+                fetchDocuments();
+            } else {
+                alert(`Upload failed: ${data.message}`);
+            }
+        } catch (err) {
+            console.error("Upload error:", err);
+            alert("Error communicating with file upload API.");
+        } finally {
+            // Reset dropzone UI
+            dropzone.querySelector(".dropzone-icon").className = originalIcon;
+            dropzone.querySelector(".dropzone-text").textContent = originalText;
+            dropzone.querySelector(".dropzone-subtext").textContent = originalSubtext;
+            dropzone.style.pointerEvents = "auto";
+            fileUploader.value = ""; // Clear file selector
+        }
+    }
+
+    // Streams RAG response using ReadableStream API
+    async function executeStreamingQuery(message) {
+        const response = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message, session_id: sessionId })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        
+        // Hide typing indicator when stream opens
+        typingIndicator.classList.add("hidden");
+
+        // Set up fresh assistant manuscript entry
+        const entryDiv = document.createElement("div");
+        entryDiv.className = "manuscript-entry assistant-entry";
+        entryDiv.innerHTML = `
+            <div class="manuscript-body">
+                <div class="msg-body"></div>
+                <div class="codex-citations-bar hidden">
+                    <span class="citations-label">References:</span>
+                    <div class="citations-chips"></div>
+                </div>
+            </div>
+        `;
+        chatMessages.appendChild(entryDiv);
+        scrollToBottom();
+
+        const msgBody = entryDiv.querySelector(".msg-body");
+        const citationsBar = entryDiv.querySelector(".codex-citations-bar");
+        const citationsChips = entryDiv.querySelector(".citations-chips");
+
+        let responseText = "";
+        let sources = [];
+        let buffer = "";
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop(); // Keep partial line in buffer
+
+            for (const part of parts) {
+                if (part.trim() === "") continue;
+
+                const eventMatch = part.match(/^event:\s*(\w+)/m);
+                const dataMatch = part.match(/^data:\s*(.*)/m);
+
+                if (eventMatch && dataMatch) {
+                    const event = eventMatch[1];
+                    const rawData = dataMatch[1];
+                    
+                    try {
+                        const data = JSON.parse(rawData);
+                        
+                        if (event === "sources") {
+                            sources = data;
+                        } else if (event === "token") {
+                            responseText += data;
+                            msgBody.innerHTML = formatMarkdown(responseText);
+                            scrollToBottom();
+                        } else if (event === "done") {
+                            break;
+                        }
+                    } catch (err) {
+                        console.error("JSON parsing error:", part, err);
+                    }
+                }
+            }
+        }
+
+        // Render Citations
+        if (sources && sources.length > 0) {
+            citationsBar.classList.remove("hidden");
+            citationsChips.innerHTML = "";
+            
+            sources.forEach((source) => {
+                const chip = document.createElement("button");
+                chip.className = "footnote-pill";
+                chip.innerHTML = `<i class="fa-solid fa-scroll"></i> P.${source.page} [${Math.round(source.score * 100)}%]`;
+                
+                chip.addEventListener("click", () => {
+                    openDrawer(source);
+                });
+                
+                citationsChips.appendChild(chip);
+            });
+        }
+    }
+
+    // ----------------------------------------------------
+    // Drawer Management
+    // ----------------------------------------------------
+    
+    function openDrawer(source) {
+        citationSourceDoc.textContent = source.source;
+        citationPage.textContent = `PAGE ${source.page}`;
+        citationScore.textContent = `${(source.score * 100).toFixed(1)}% RELEVANCE`;
+        
+        // Verbatim quote
+        citationText.textContent = source.snippet;
+        
+        citationOverlay.classList.add("active");
+        citationDrawer.classList.add("active");
+    }
+
+    function closeDrawer() {
+        citationOverlay.classList.remove("active");
+        citationDrawer.classList.remove("active");
+    }
+
+    // ----------------------------------------------------
+    // Helpers & Formatters
+    // ----------------------------------------------------
+    
+    function appendMessage(role, text) {
+        const entryDiv = document.createElement("div");
+        entryDiv.className = `manuscript-entry ${role}-entry`;
+        
+        if (role === "user") {
+            entryDiv.innerHTML = `<div class="query-title">${text}</div>`;
+        } else {
+            entryDiv.innerHTML = `
+                <div class="manuscript-body">
+                    <p>${text}</p>
+                </div>
+            `;
+        }
+        
+        chatMessages.appendChild(entryDiv);
+        scrollToBottom();
+    }
+
+    function scrollToBottom() {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function generateUUID() {
+        return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+            (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)
+        );
+    }
+
+    // Elegant Regex-based Markdown formatter
+    function formatMarkdown(text) {
+        let html = text;
+        
+        // Escape HTML
+        html = html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        
+        // Code Blocks
+        html = html.replace(/```([\s\S]*?)```/g, (match, p1) => {
+            return `<pre><code>${p1.trim()}</code></pre>`;
+        });
+        
+        // Inline Code
+        html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+        
+        // Bold
+        html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+        
+        // Bullet list
+        html = html.replace(/^\s*-\s+(.+)$/gm, "<li>$1</li>");
+        html = html.replace(/(<li>.*<\/li>)/s, "<ul>$1</ul>");
+        
+        // Line breaks
+        html = html.replace(/\n/g, "<br>");
+        
+        return html;
+    }
+});
