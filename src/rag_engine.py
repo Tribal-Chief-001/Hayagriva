@@ -23,15 +23,31 @@ class RAGEngine:
     def refresh_bm25_retriever(self):
         """Loads all child chunks from the vector store and builds the BM25 index."""
         try:
-            # Check if vector store is initialized and has documents
-            data = self.vector_store.get()
             documents = []
-            
-            if data and "documents" in data and data["documents"]:
-                for i in range(len(data["documents"])):
-                    text = data["documents"][i]
-                    metadata = data["metadatas"][i] if data["metadatas"] else {}
-                    documents.append(Document(page_content=text, metadata=metadata))
+            # Check if vector store is Qdrant
+            if hasattr(self.vector_store, "client") and hasattr(self.vector_store, "collection_name") and self.vector_store.client is not None:
+                print(f"[RAGEngine] Scrolling Qdrant collection '{self.vector_store.collection_name}' to build BM25 index...")
+                points, _ = self.vector_store.client.scroll(
+                    collection_name=self.vector_store.collection_name,
+                    limit=10000,
+                    with_payload=True,
+                    with_vectors=False
+                )
+                for point in points:
+                    payload = point.payload or {}
+                    # LangChain Qdrant stores page_content and metadata in payload keys
+                    text = payload.get("page_content", "")
+                    metadata = payload.get("metadata", {})
+                    if text:
+                        documents.append(Document(page_content=text, metadata=metadata))
+            elif hasattr(self.vector_store, "get"):
+                # Check if vector store is initialized and has documents (Chroma DB)
+                data = self.vector_store.get()
+                if data and "documents" in data and data["documents"]:
+                    for i in range(len(data["documents"])):
+                        text = data["documents"][i]
+                        metadata = data["metadatas"][i] if data["metadatas"] else {}
+                        documents.append(Document(page_content=text, metadata=metadata))
             
             if not documents:
                 print("[RAGEngine] No documents found in vector store. BM25 is inactive.")

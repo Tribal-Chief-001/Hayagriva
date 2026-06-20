@@ -1,5 +1,4 @@
 import os
-from langchain_chroma import Chroma
 from src.config import settings
 
 def get_embeddings():
@@ -35,7 +34,26 @@ def get_vector_store(embeddings):
             embeddings=embeddings
         )
     else:
+        if os.getenv("VERCEL") == "1":
+            print("[VectorStore] WARNING: Running on Vercel without Qdrant Cloud credentials. Chroma is unsupported on Vercel.")
+            class DummyVectorStore:
+                client = None
+                collection_name = "hayagriva_child_chunks"
+                def as_retriever(self, **kwargs):
+                    class DummyRetriever:
+                        def invoke(self, query):
+                            print("[VectorStore] Retrieval skipped: Qdrant credentials missing.")
+                            return []
+                    return DummyRetriever()
+                def get(self):
+                    return {"documents": [], "metadatas": []}
+                def add_texts(self, texts, metadatas=None, **kwargs):
+                    print("[VectorStore] Cannot add texts: Vector store is inactive on Vercel (missing Qdrant credentials).")
+                    return []
+            return DummyVectorStore()
+
         print(f"[VectorStore] Initializing Local Chroma Vector Store at: {settings.CHROMA_DB_DIR}")
+        from langchain_chroma import Chroma
         return Chroma(
             persist_directory=settings.CHROMA_DB_DIR,
             embedding_function=embeddings,
