@@ -332,10 +332,11 @@ class RAGEngine:
 
         # Calculate final metrics
         latency = round(time.time() - start_time, 2)
+        num_facts = len([line for line in graph_facts.strip().split("\n") if line.strip() and not line.startswith("[")]) if graph_facts else 0
         metrics = {
             "latency": latency,
             "chunks": len(retrieved_docs),
-            "graph": bool(graph_facts)
+            "graph": num_facts if settings.is_graph_enabled else False
         }
         yield {"event": "metrics", "data": metrics}
 

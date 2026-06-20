@@ -8,7 +8,7 @@ from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.config import settings
-from src.graph_store import get_graph
+from langchain_neo4j import Neo4jGraph
 from src.ingest import ingest_document_bytes, delete_document_from_db
 
 def extract_and_upload_graph(file_path: str):
@@ -20,9 +20,15 @@ def extract_and_upload_graph(file_path: str):
         print("[ERROR] Neo4j is not configured. Please add NEO4J_URI, NEO4J_USERNAME, and NEO4J_PASSWORD to your .env file.")
         return
 
-    graph = get_graph()
-    if not graph:
-        print("[ERROR] Failed to connect to Neo4j database.")
+    try:
+        graph = Neo4jGraph(
+            url=settings.NEO4J_URI,
+            username=settings.NEO4J_USERNAME,
+            password=settings.NEO4J_PASSWORD,
+            database=settings.NEO4J_DATABASE
+        )
+    except Exception as e:
+        print(f"[ERROR] Failed to connect to Neo4j database: {e}")
         return
 
     filename = Path(file_path).name

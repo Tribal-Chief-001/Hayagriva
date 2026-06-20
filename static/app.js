@@ -197,9 +197,11 @@ document.addEventListener("DOMContentLoaded", () => {
             await executeStreamingQuery(queryText, timerInterval);
         } catch (err) {
             console.error("Stream error: ", err);
+            clearInterval(timerInterval);
             appendMessage("assistant", "Apologies, but an issue occurred while querying the server stream.");
             typingIndicator.classList.add("hidden");
         } finally {
+            clearInterval(timerInterval);
             userInput.disabled = false;
             sendBtn.disabled = false;
             userInput.focus();
@@ -403,29 +405,33 @@ document.addEventListener("DOMContentLoaded", () => {
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
         
-        // Hide typing indicator when stream opens
-        typingIndicator.classList.add("hidden");
+        let entryDiv = null;
+        let msgBody = null;
+        let citationsBar = null;
+        let citationsChips = null;
+        let metricsBar = null;
 
-        // Set up fresh assistant manuscript entry
-        const entryDiv = document.createElement("div");
-        entryDiv.className = "manuscript-entry assistant-entry";
-        entryDiv.innerHTML = `
-            <div class="manuscript-body">
-                <div class="msg-body"></div>
-                <div class="codex-citations-bar hidden">
-                    <span class="citations-label">References:</span>
-                    <div class="citations-chips"></div>
+        function ensureEntryCreated() {
+            if (entryDiv) return;
+            entryDiv = document.createElement("div");
+            entryDiv.className = "manuscript-entry assistant-entry";
+            entryDiv.innerHTML = `
+                <div class="manuscript-body">
+                    <div class="msg-body"></div>
+                    <div class="codex-citations-bar hidden">
+                        <span class="citations-label">References:</span>
+                        <div class="citations-chips"></div>
+                    </div>
+                    <div class="codex-metrics-bar hidden"></div>
                 </div>
-                <div class="codex-metrics-bar hidden"></div>
-            </div>
-        `;
-        chatMessages.appendChild(entryDiv);
-        scrollToBottom();
-
-        const msgBody = entryDiv.querySelector(".msg-body");
-        const citationsBar = entryDiv.querySelector(".codex-citations-bar");
-        const citationsChips = entryDiv.querySelector(".citations-chips");
-        const metricsBar = entryDiv.querySelector(".codex-metrics-bar");
+            `;
+            chatMessages.appendChild(entryDiv);
+            msgBody = entryDiv.querySelector(".msg-body");
+            citationsBar = entryDiv.querySelector(".codex-citations-bar");
+            citationsChips = entryDiv.querySelector(".citations-chips");
+            metricsBar = entryDiv.querySelector(".codex-metrics-bar");
+            scrollToBottom();
+        }
 
         const thinkingTxt = typingIndicator.querySelector(".thinking-txt");
 
@@ -456,7 +462,10 @@ document.addEventListener("DOMContentLoaded", () => {
                         
                         if (event === "sources") {
                             sources = data;
+                            ensureEntryCreated();
                         } else if (event === "token") {
+                            ensureEntryCreated();
+                            typingIndicator.classList.add("hidden");
                             responseText += data;
                             msgBody.innerHTML = formatMarkdown(responseText);
                             scrollToBottom();
@@ -465,15 +474,18 @@ document.addEventListener("DOMContentLoaded", () => {
                             thinkingTxt.innerHTML = `${data} <span class='stopwatch'>${elapsed}</span>`;
                         } else if (event === "metrics") {
                             clearInterval(timerInterval);
+                            ensureEntryCreated();
+                            typingIndicator.classList.add("hidden");
                             metricsBar.innerHTML = `
                                 <div class="metrics-item" title="Pipeline Latency"><i class="fa-solid fa-stopwatch"></i> ${data.latency}s</div>
                                 <div class="metrics-item" title="Vector Chunks Retrieved"><i class="fa-solid fa-book-open"></i> ${data.chunks} chunks</div>
-                                <div class="metrics-item" title="Graph DB Traversal"><i class="fa-solid fa-diagram-project"></i> ${data.graph ? "Traversed" : "Skipped"}</div>
+                                <div class="metrics-item" title="Graph DB Traversal"><i class="fa-solid fa-diagram-project"></i> ${typeof data.graph === 'number' ? `${data.graph} facts` : (data.graph ? "Traversed" : "Skipped")}</div>
                             `;
                             metricsBar.classList.remove("hidden");
                             scrollToBottom();
                         } else if (event === "done") {
                             clearInterval(timerInterval);
+                            typingIndicator.classList.add("hidden");
                             break;
                         }
                     } catch (err) {
@@ -485,6 +497,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // Render Citations
         if (sources && sources.length > 0) {
+            ensureEntryCreated();
             citationsBar.classList.remove("hidden");
             citationsChips.innerHTML = "";
             
@@ -557,7 +570,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Elegant Regex-based Markdown formatter
     function formatMarkdown(text) {
-        let html = text;
+        // Strip carriage returns first
+        let html = text.replace(/\r/g, "");
         
         // Escape HTML
         html = html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -577,13 +591,13 @@ document.addEventListener("DOMContentLoaded", () => {
         html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
         html = html.replace(/_([^_]+)_/g, "<em>$1</em>");
 
-        // Headings (Block elements)
-        html = html.replace(/^######\s+(.+)$/gm, "<h6>$1</h6>");
-        html = html.replace(/^#####\s+(.+)$/gm, "<h5>$1</h5>");
-        html = html.replace(/^####\s+(.+)$/gm, "<h4>$1</h4>");
-        html = html.replace(/^###\s+(.+)$/gm, "<h3>$1</h3>");
-        html = html.replace(/^##\s+(.+)$/gm, "<h2>$1</h2>");
-        html = html.replace(/^#\s+(.+)$/gm, "<h1>$1</h1>");
+        // Headings (Block elements) - strips leading spaces, and optional trailing hashes
+        html = html.replace(/^\s*######\s+(.+?)(?:\s*######)?\s*$/gm, "<h6>$1</h6>");
+        html = html.replace(/^\s*#####\s+(.+?)(?:\s*#####)?\s*$/gm, "<h5>$1</h5>");
+        html = html.replace(/^\s*####\s+(.+?)(?:\s*####)?\s*$/gm, "<h4>$1</h4>");
+        html = html.replace(/^\s*###\s+(.+?)(?:\s*###)?\s*$/gm, "<h3>$1</h3>");
+        html = html.replace(/^\s*##\s+(.+?)(?:\s*##)?\s*$/gm, "<h2>$1</h2>");
+        html = html.replace(/^\s*#\s+(.+?)(?:\s*#)?\s*$/gm, "<h1>$1</h1>");
 
         // Blockquotes
         html = html.replace(/^&gt;\s+(.+)$/gm, "<blockquote>$1</blockquote>");

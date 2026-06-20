@@ -16,3 +16,4 @@ cohere==5.5.0
 python-multipart==0.0.32
 langchain-ollama>=0.1.0
 langchain-neo4j>=0.1.0
+langchain-experimental>=0.0.49
