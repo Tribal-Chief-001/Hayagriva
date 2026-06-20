@@ -63,7 +63,15 @@ def chat_endpoint(request: ChatRequest):
             yield f"event: token\ndata: {json.dumps(f'[Server error: {e}]')}\n\n"
             yield "event: done\ndata: \"\"\n\n"
 
-    return StreamingResponse(sse_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        sse_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
