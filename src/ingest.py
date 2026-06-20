@@ -226,21 +226,21 @@ def ingest_document_bytes(file_bytes: bytes, filename: str) -> dict:
         content_docs = [d for d in child_docs if d.metadata.get("tag") != _LOG_COLLECTION_TAG]
 
         on_vercel = os.getenv("VERCEL") == "1"
-        VERCEL_MAX_PAGES  = 8    # ~200 chunks for PDFs → ~10 embed calls
-        VERCEL_MAX_CHUNKS = 200  # Hard chunk ceiling for any file type
+        VERCEL_MAX_PAGES  = 40   # 40 pages ≈ 800 chunks ≈ 40 embed calls ≈ 120s → fits in 300s
+        VERCEL_MAX_CHUNKS = 800  # Hard chunk ceiling for any file type on Vercel
 
-        # Enforce limits on Vercel to prevent function timeout
+        # Enforce limits on Vercel to prevent hitting the 300s maxDuration
         if on_vercel:
             if len(pages) > VERCEL_MAX_PAGES:
                 raise ValueError(
                     f"Document has {len(pages)} pages — Vercel can only process up to "
-                    f"{VERCEL_MAX_PAGES} pages per upload. Please upload shorter documents "
+                    f"{VERCEL_MAX_PAGES} pages per upload. Please split the document "
                     f"or run ingestion locally: python -m src.ingest"
                 )
             if len(content_docs) > VERCEL_MAX_CHUNKS:
                 raise ValueError(
                     f"Document produces {len(content_docs)} chunks — Vercel limit is "
-                    f"{VERCEL_MAX_CHUNKS}. Please upload shorter documents "
+                    f"{VERCEL_MAX_CHUNKS}. Please split the document "
                     f"or run ingestion locally: python -m src.ingest"
                 )
 
@@ -306,10 +306,11 @@ def ingest_document_bytes(file_bytes: bytes, filename: str) -> dict:
                 raw_client.upsert(collection_name=settings.QDRANT_COLLECTION, points=points)
                 print(f"[Ingest] Batch {batch_num}/{total_batches} upserted.")
 
-                # On Vercel: no sleep (small docs only, within 100 RPM window)
-                # Locally: sleep 20s between batches for large docs
-                if not on_vercel and (i + BATCH_SIZE < len(content_docs)):
-                    time.sleep(20)
+                # Sleep between batches to stay under 100 RPM (Gemini free tier):
+                #   Vercel: 1s sleep → 3s/batch (embed ~2s + sleep 1s) → 40 batches = 120s ≪ 300s
+                #   Local:  20s sleep → handles large books without hitting rate limit
+                if i + BATCH_SIZE < len(content_docs):
+                    time.sleep(1 if on_vercel else 20)
 
         else:
             # Local Chroma path — LangChain handles embedding internally

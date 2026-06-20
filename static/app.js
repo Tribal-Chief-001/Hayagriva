@@ -292,7 +292,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (err) {
             console.error("Upload network error:", err);
-            setDropzoneStatus("error", "NETWORK ERROR", "Check console for details");
+            setDropzoneStatus("error", "NETWORK ERROR", "Check console · may be a large doc (>40 pages)");
             setTimeout(resetDropzone, 5000);
         }
     }
