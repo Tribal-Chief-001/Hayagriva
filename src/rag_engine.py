@@ -5,6 +5,7 @@ from langchain_community.retrievers import BM25Retriever
 from src.config import settings
 from src.vector_store import get_embeddings, get_vector_store
 from src.reranker import CrossEncoderReranker
+from src.graph_store import get_graph, query_graph
 
 _LOG_TAG = "__ingestion_log__"
 
@@ -242,7 +243,7 @@ class RAGEngine:
             })
         yield {"event": "sources", "data": sources}
 
-        # Build prompt
+        # Build Vector Prompt Context
         if retrieved_docs:
             context_text = "\n\n".join([
                 f"[Source: {doc.metadata.get('source', 'Unknown')} | Page {doc.metadata.get('page', 0)}]\n{doc.page_content}"
@@ -250,17 +251,34 @@ class RAGEngine:
             ])
         else:
             context_text = "[No relevant documents found in the corpus.]"
+            
+        # -------------------------------------------------------------
+        # GRAPH RAG INTEGRATION (Simultaneous Graph Traversal)
+        # -------------------------------------------------------------
+        graph_facts = ""
+        if settings.is_graph_enabled:
+            print(f"[RAGEngine] Querying Neo4j Knowledge Graph...")
+            graph = get_graph()
+            if graph:
+                # We use the main_query to traverse the graph relationships
+                graph_result = query_graph(main_query, graph)
+                if graph_result:
+                    print(f"[RAGEngine] Graph found relevant facts: {graph_result[:100]}...")
+                    graph_facts = f"\n\n[KNOWLEDGE GRAPH FACTS]:\n{graph_result}\n"
+                else:
+                    print(f"[RAGEngine] Graph returned no facts.")
+        # -------------------------------------------------------------
 
         final_prompt = (
             "You are Hayagriva, a horse-headed avatar of knowledge and wisdom, "
             "serving as an expert RAG AI assistant.\n"
-            "Answer the user's question using the retrieved context below. "
+            "Answer the user's question using the retrieved context below (which may include paragraphs and structural graph facts). "
             "The user may ask analytical questions about the text (e.g. 'Why did the author...', 'What is the theme...'). "
             "You MUST use your reasoning to answer these based on the provided text.\n"
             "If the question is completely unrelated to the context, say exactly: "
             "\"I cannot find the answer in the provided documents.\"\n"
             "Keep the tone wise, intellectual, and direct.\n\n"
-            f"Context:\n{context_text}\n\n"
+            f"Context:\n{context_text}{graph_facts}\n\n"
             f"Chat History:\n{history_text}\n\n"
             f"Question: {main_query}\n"
             "Answer:"

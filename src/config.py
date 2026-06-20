@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from typing import Optional
 
 # Load environment variables from .env if present
 load_dotenv()
@@ -11,10 +12,15 @@ class Settings:
     # Server configuration
     PORT: int = int(os.getenv("PORT", "8000"))
 
-    # API Keys & Cloud settings
-    GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY") or None
-    QDRANT_URL: str | None = os.getenv("QDRANT_URL") or None
-    QDRANT_API_KEY: str | None = os.getenv("QDRANT_API_KEY") or None
+    # Cloud Config
+    GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
+    COHERE_API_KEY: Optional[str] = os.getenv("COHERE_API_KEY")
+    QDRANT_URL: Optional[str] = os.getenv("QDRANT_URL")
+    QDRANT_API_KEY: Optional[str] = os.getenv("QDRANT_API_KEY")
+    NEO4J_URI: Optional[str] = os.getenv("NEO4J_URI")
+    NEO4J_USERNAME: Optional[str] = os.getenv("NEO4J_USERNAME")
+    NEO4J_PASSWORD: Optional[str] = os.getenv("NEO4J_PASSWORD")
+    NEO4J_DATABASE: str = os.getenv("NEO4J_DATABASE", "neo4j")
 
     # Directory paths
     CHROMA_DB_DIR: str = str(PROJECT_ROOT / "chroma_db")
@@ -32,9 +38,7 @@ class Settings:
     # Dimension of gemini-embedding-2 output vectors
     EMBEDDING_DIM: int = 3072
 
-    # Ingestion chunking — kept small to minimise API calls on the free tier.
-    # Parent: 800 chars  →  Child: 250 chars  →  ~3 children per parent.
-    # A 15-page PDF ≈ 45 parents ≈ 135 children  →  5 batches of 30 → well under 100 RPM.
+    # Ingestion chunking
     PARENT_CHUNK_SIZE: int = 3000
     PARENT_CHUNK_OVERLAP: int = 300
     CHILD_CHUNK_SIZE: int = 1000
@@ -48,7 +52,12 @@ class Settings:
     @property
     def is_qdrant_mode(self) -> bool:
         """Determines if we are running in cloud vector store mode using Qdrant."""
-        return self.QDRANT_URL is not None and self.QDRANT_API_KEY is not None
+        return bool(self.QDRANT_URL and self.QDRANT_API_KEY)
+
+    @property
+    def is_graph_enabled(self) -> bool:
+        """Determines if Neo4j graph features are enabled."""
+        return bool(self.NEO4J_URI and self.NEO4J_USERNAME and self.NEO4J_PASSWORD)
 
 
 # Instantiate settings
