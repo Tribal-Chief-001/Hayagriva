@@ -240,7 +240,7 @@ class RAGEngine:
             
             latency = round(time.time() - start_time, 2)
             metrics = {"latency": latency, "chunks": 0, "graph": False}
-            yield {"event": "metrics", "data": json.dumps(metrics)}
+            yield {"event": "metrics", "data": metrics}
             
             yield {"event": "done", "data": ""}
             return
@@ -325,6 +325,6 @@ class RAGEngine:
             "chunks": len(retrieved_docs),
             "graph": bool(graph_facts)
         }
-        yield {"event": "metrics", "data": json.dumps(metrics)}
+        yield {"event": "metrics", "data": metrics}
 
         yield {"event": "done", "data": ""}
