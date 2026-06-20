@@ -1,6 +1,5 @@
 import os
 from langchain_community.graphs import Neo4jGraph
-from langchain_google_genai import ChatGoogleGenerativeAI
 from src.config import settings
 
 def get_graph() -> Neo4jGraph | None:
@@ -29,12 +28,9 @@ def query_graph(query: str, graph: Neo4jGraph) -> str:
         
     try:
         from langchain.chains import GraphCypherQAChain
+        from src.llm import get_llm
         
-        llm = ChatGoogleGenerativeAI(
-            model=settings.GEMINI_LLM_MODEL,
-            google_api_key=settings.GEMINI_API_KEY,
-            temperature=0
-        )
+        llm = get_llm(temperature=0)
         
         chain = GraphCypherQAChain.from_llm(
             graph=graph,
