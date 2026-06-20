@@ -8,15 +8,6 @@
   ],
   "routes": [
     {
-      "src": "/static/(.*)",
-      "headers": { "cache-control": "s-maxage=31536000" },
-      "dest": "/static/$1"
-    },
-    {
-      "src": "/api/(.*)",
-      "dest": "src/api.py"
-    },
-    {
       "src": "/(.*)",
       "dest": "src/api.py"
     }
