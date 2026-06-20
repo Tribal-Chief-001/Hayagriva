@@ -112,27 +112,8 @@ class RAGEngine:
 
         return parent_docs
 
-    def retrieve_context(self, query: str) -> list:
-        """Hybrid retrieval: Dense + BM25 → RRF fusion → parent resolve → rerank."""
-        # 1. Dense retrieval
-        dense_retriever = self.vector_store.as_retriever(search_kwargs={"k": 10})
-        try:
-            dense_results = dense_retriever.invoke(query)
-            # Filter out log-tag sentinels
-            dense_results = [d for d in dense_results if d.metadata.get("tag") != _LOG_TAG]
-        except Exception as e:
-            print(f"[RAGEngine] Dense retrieval error: {e}")
-            dense_results = []
-
-        # 2. BM25 retrieval
-        sparse_results = []
-        if self.bm25_retriever:
-            try:
-                sparse_results = self.bm25_retriever.invoke(query)
-            except Exception as e:
-                print(f"[RAGEngine] BM25 error: {e}")
-
-        # 3. Reciprocal Rank Fusion
+    def retrieve_context(self, queries: list) -> list:
+        """Hybrid retrieval: Dense + BM25 over multiple query variations → RRF fusion → parent resolve → rerank."""
         all_chunks: dict = {}
 
         def apply_rrf(results, weight=1.0):
@@ -142,8 +123,24 @@ class RAGEngine:
                     all_chunks[key] = {"doc": doc, "score": 0.0}
                 all_chunks[key]["score"] += weight / (60.0 + rank)
 
-        apply_rrf(dense_results, weight=0.6)
-        apply_rrf(sparse_results, weight=0.4)
+        dense_retriever = self.vector_store.as_retriever(search_kwargs={"k": 5})
+        
+        for q in queries:
+            # 1. Dense retrieval
+            try:
+                dense_results = dense_retriever.invoke(q)
+                dense_results = [d for d in dense_results if d.metadata.get("tag") != _LOG_TAG]
+                apply_rrf(dense_results, weight=0.6)
+            except Exception as e:
+                print(f"[RAGEngine] Dense retrieval error for '{q}': {e}")
+
+            # 2. BM25 retrieval
+            if self.bm25_retriever:
+                try:
+                    sparse_results = self.bm25_retriever.invoke(q)
+                    apply_rrf(sparse_results, weight=0.4)
+                except Exception as e:
+                    print(f"[RAGEngine] BM25 error for '{q}': {e}")
 
         top_chunks = [
             item["doc"]
@@ -153,8 +150,8 @@ class RAGEngine:
         # 4. Resolve child → parent
         parent_docs = self._resolve_parents(top_chunks)
 
-        # 5. Cross-Encoder rerank
-        return self.reranker.rerank(query, parent_docs, top_k=3)
+        # 5. Cross-Encoder rerank against the primary query
+        return self.reranker.rerank(queries[0], parent_docs, top_k=3)
 
     def get_history_text(self, session_id: str) -> str:
         history = self.session_histories.get(session_id, [])
@@ -166,27 +163,50 @@ class RAGEngine:
             formatted.append(f"{role}: {msg['content']}")
         return "\n".join(formatted)
 
-    def condense_query(self, query: str, history_text: str) -> str:
-        """Converts a follow-up question into a standalone query using conversation history."""
-        if not history_text:
-            return query
+    def condense_and_expand_query(self, query: str, history_text: str) -> list:
+        """Converts a follow-up question into standalone variations (Multi-Query Expansion)."""
         llm = self.get_llm()
         prompt = (
-            "Given the following conversation history and a follow-up question, "
-            "rephrase the follow-up question to be a standalone question in its original language. "
-            "Be brief.\n\n"
-            f"History:\n{history_text}\n\n"
-            f"Follow-up: {query}\n"
-            "Standalone:"
+            "Given the conversation history and a user question, generate 3 different standalone versions of the question.\n"
+            "Use synonyms and different phrasing to maximize semantic search retrieval. Return exactly 3 lines, one for each variation.\n"
+            "Do not include numbers or bullet points at the start of the lines.\n\n"
+            f"History:\n{history_text if history_text else 'None'}\n\n"
+            f"Question: {query}\n"
+            "Variations:"
         )
         try:
             response = llm.invoke(prompt)
-            condensed = response.content.strip()
-            print(f"[RAGEngine] Condensed: '{query}' → '{condensed}'")
-            return condensed
+            lines = [line.strip().lstrip("-*1234567890. ") for line in response.content.strip().split("\n") if line.strip()]
+            if len(lines) >= 1:
+                print(f"[RAGEngine] Expanded queries: {lines[:3]}")
+                return lines[:3]
         except Exception as e:
-            print(f"[RAGEngine] Condensation failed: {e}")
-            return query
+            print(f"[RAGEngine] Expansion failed: {e}")
+        return [query]
+
+    def grade_documents(self, query: str, docs: list) -> bool:
+        """Self-Reflective RAG Grader: Checks if retrieved docs are relevant to the query."""
+        if not docs:
+            return False
+        llm = self.get_llm()
+        context_text = "\n\n".join([d.page_content for d in docs])
+        prompt = (
+            "You are a strict grading assistant evaluating if a retrieved document is relevant to a user's question.\n"
+            "If the document contains ANY keywords, concepts, or semantic meaning that could help answer the question, grade it as 'yes'.\n"
+            "If the document is completely unrelated and useless, grade it as 'no'.\n"
+            "Return ONLY 'yes' or 'no' without any punctuation.\n\n"
+            f"Question: {query}\n\n"
+            f"Context: {context_text[:4000]}\n\n"
+            "Is relevant? (yes/no):"
+        )
+        try:
+            res = llm.invoke(prompt)
+            decision = res.content.strip().lower()
+            print(f"[RAGEngine] Grader decision for '{query}': {decision}")
+            return "yes" in decision
+        except Exception as e:
+            print(f"[RAGEngine] Grader failed ({e}), defaulting to True")
+            return True
 
     def query(self, user_query: str, session_id: str):
         """Executes a query and yields SSE events for FastAPI streaming."""
@@ -194,10 +214,22 @@ class RAGEngine:
             self.session_histories[session_id] = []
 
         history_text = self.get_history_text(session_id)
-        standalone_query = self.condense_query(user_query, history_text)
+        queries = self.condense_and_expand_query(user_query, history_text)
+        main_query = queries[0]
 
-        # Retrieve + rerank
-        retrieved_docs = self.retrieve_context(standalone_query)
+        # Retrieve + rerank using Multi-Query Expansion
+        retrieved_docs = self.retrieve_context(queries)
+
+        # Self-Reflective Grader
+        is_relevant = self.grade_documents(main_query, retrieved_docs)
+        if not is_relevant:
+            print("[RAGEngine] Grader deemed documents irrelevant. Bypassing final generation.")
+            msg = "I cannot find the answer in the provided documents. The retrieved context does not appear to be relevant to your question."
+            yield {"event": "token", "data": msg}
+            self.session_histories[session_id].append({"role": "user", "content": user_query})
+            self.session_histories[session_id].append({"role": "assistant", "content": msg})
+            yield {"event": "done", "data": ""}
+            return
 
         # Emit sources first
         sources = []
@@ -230,7 +262,7 @@ class RAGEngine:
             "Keep the tone wise, intellectual, and direct.\n\n"
             f"Context:\n{context_text}\n\n"
             f"Chat History:\n{history_text}\n\n"
-            f"Question: {standalone_query}\n"
+            f"Question: {main_query}\n"
             "Answer:"
         )
 
@@ -239,7 +271,7 @@ class RAGEngine:
         full_response = ""
 
         try:
-            print(f"[RAGEngine] Streaming LLM response for: {standalone_query}")
+            print(f"[RAGEngine] Streaming LLM response for: {main_query}")
             for chunk in llm.stream(final_prompt):
                 token = chunk.content if hasattr(chunk, "content") else str(chunk)
                 full_response += token
