@@ -53,9 +53,9 @@ def get_status():
 # ---------------------------------------------------------------------------
 
 @app.post("/api/chat")
-async def chat_endpoint(request: ChatRequest):
+def chat_endpoint(request: ChatRequest):
     """Streams RAG tokens and citation metadata using Server-Sent Events."""
-    async def sse_generator():
+    def sse_generator():
         try:
             for event in rag_engine.query(request.message, request.session_id):
                 yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
