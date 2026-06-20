@@ -30,7 +30,7 @@ class Settings:
     # Model configuration
     EMBEDDING_MODEL_NAME: str = "sentence-transformers/all-MiniLM-L6-v2"
     OLLAMA_MODEL_NAME: str = "qwen3.5:2b"
-    GEMINI_LLM_MODEL: str = "gemini-2.5-flash"
+    GEMINI_LLM_MODEL: str = "gemini-3.5-flash"
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-2"
 
     # Vector store settings
