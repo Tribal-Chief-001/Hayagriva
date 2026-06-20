@@ -233,6 +233,33 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    function updatePlaceholder(documents) {
+        const userInput = document.getElementById("user-input");
+        if (!userInput) return;
+        
+        if (documents && documents.length > 0) {
+            // Find the latest document (last one in list)
+            const latestDoc = documents[documents.length - 1].filename;
+            let suggestedQuery = `What are the main findings in ${latestDoc}?`;
+            
+            const fnLower = latestDoc.toLowerCase();
+            if (fnLower.includes("fairytale") || fnLower.includes("heroes") || fnLower.includes("aldric")) {
+                suggestedQuery = "Who is King Aldric?";
+            } else if (fnLower.includes("kant") || fnLower.includes("critique") || fnLower.includes("arendt")) {
+                suggestedQuery = "What is Kant's concept of duty?";
+            } else if (fnLower.includes("rich") || fnLower.includes("poor") || fnLower.includes("karl") || fnLower.includes("marx")) {
+                suggestedQuery = "What is the critique of capitalism?";
+            } else {
+                // Strip extension for cleaner look
+                const cleanName = latestDoc.replace(/\.[^/.]+$/, "");
+                suggestedQuery = `What is the core topic of ${cleanName}?`;
+            }
+            userInput.placeholder = `Submit a query to the corpus (e.g. '${suggestedQuery}')...`;
+        } else {
+            userInput.placeholder = "Submit a query to the corpus (please upload a document first!)...";
+        }
+    }
+
     async function fetchDocuments() {
         docList.innerHTML = "<li class='loading-item'>Loading catalog...</li>";
         try {
@@ -242,8 +269,11 @@ document.addEventListener("DOMContentLoaded", () => {
             docList.innerHTML = "";
             if (!data.documents || data.documents.length === 0) {
                 docList.innerHTML = "<li class='catalog-empty'>No texts indexed.</li>";
+                updatePlaceholder(null);
                 return;
             }
+
+            updatePlaceholder(data.documents);
 
             data.documents.forEach(doc => {
                 const li = document.createElement("li");
@@ -285,6 +315,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (err) {
             console.error("Error loading documents:", err);
             docList.innerHTML = "<li class='catalog-empty'>Failed to load index.</li>";
+            updatePlaceholder(null);
         }
     }
 
@@ -542,13 +573,34 @@ document.addEventListener("DOMContentLoaded", () => {
         // Bold
         html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
         
-        // Bullet list
-        html = html.replace(/^\s*-\s+(.+)$/gm, "<li>$1</li>");
-        html = html.replace(/(<li>.*<\/li>)/s, "<ul>$1</ul>");
+        // Italic
+        html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+        html = html.replace(/_([^_]+)_/g, "<em>$1</em>");
+
+        // Headings (Block elements)
+        html = html.replace(/^######\s+(.+)$/gm, "<h6>$1</h6>");
+        html = html.replace(/^#####\s+(.+)$/gm, "<h5>$1</h5>");
+        html = html.replace(/^####\s+(.+)$/gm, "<h4>$1</h4>");
+        html = html.replace(/^###\s+(.+)$/gm, "<h3>$1</h3>");
+        html = html.replace(/^##\s+(.+)$/gm, "<h2>$1</h2>");
+        html = html.replace(/^#\s+(.+)$/gm, "<h1>$1</h1>");
+
+        // Blockquotes
+        html = html.replace(/^&gt;\s+(.+)$/gm, "<blockquote>$1</blockquote>");
+        
+        // Bullet list (match -, *, +)
+        html = html.replace(/^\s*[-*+]\s+(.+)$/gm, "<li>$1</li>");
+        
+        // Ordered list (match 1., 2., etc.)
+        html = html.replace(/^\s*\d+\.\s+(.+)$/gm, "<li>$1</li>");
         
         // Line breaks
         html = html.replace(/\n/g, "<br>");
         
+        // Cleanup consecutive <br> next to block tags
+        html = html.replace(/(<\/?(h[1-6]|pre|blockquote|li|ul|ol)>)<br>/gi, "$1");
+        html = html.replace(/<br>(<\/?(h[1-6]|pre|blockquote|li|ul|ol)>)/gi, "$1");
+
         return html;
     }
 });

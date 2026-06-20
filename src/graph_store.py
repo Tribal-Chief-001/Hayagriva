@@ -1,5 +1,5 @@
 import os
-from langchain_community.graphs import Neo4jGraph
+from langchain_neo4j import Neo4jGraph
 from src.config import settings
 
 def get_graph() -> Neo4jGraph | None:
@@ -27,7 +27,7 @@ def query_graph(query: str, graph: Neo4jGraph) -> str:
         return ""
         
     try:
-        from langchain.chains import GraphCypherQAChain
+        from langchain_neo4j import GraphCypherQAChain
         from src.llm import get_llm
         
         llm = get_llm(temperature=0)
