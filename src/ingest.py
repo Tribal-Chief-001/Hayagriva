@@ -251,8 +251,8 @@ def ingest_document_bytes(file_bytes: bytes, filename: str) -> dict:
         content_docs = [d for d in child_docs if d.metadata.get("tag") != _LOG_COLLECTION_TAG]
 
         on_vercel = os.getenv("VERCEL") == "1"
-        VERCEL_MAX_PAGES  = 40   # 40 pages ≈ 800 chunks ≈ 40 embed calls ≈ 120s → fits in 300s
-        VERCEL_MAX_CHUNKS = 800  # Hard chunk ceiling for any file type on Vercel
+        VERCEL_MAX_PAGES  = 40
+        VERCEL_MAX_CHUNKS = 90  # Strict ceiling to stay under Gemini 100 RPM Free Tier limit
 
         # Enforce limits on Vercel to prevent hitting the 300s maxDuration
         if on_vercel:
@@ -265,8 +265,8 @@ def ingest_document_bytes(file_bytes: bytes, filename: str) -> dict:
             if len(content_docs) > VERCEL_MAX_CHUNKS:
                 raise ValueError(
                     f"Document produces {len(content_docs)} chunks — Vercel limit is "
-                    f"{VERCEL_MAX_CHUNKS}. Please split the document "
-                    f"or run ingestion locally: python -m src.ingest"
+                    f"{VERCEL_MAX_CHUNKS} to stay under the Gemini free tier 100 requests/minute limit. "
+                    f"Please split the document or run ingestion locally: python -m src.ingest"
                 )
 
         print(f"[Ingest] '{filename}': {len(pages)} pages → {len(content_docs)} child chunks. Uploading in batches...")

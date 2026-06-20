@@ -35,10 +35,10 @@ class Settings:
     # Ingestion chunking — kept small to minimise API calls on the free tier.
     # Parent: 800 chars  →  Child: 250 chars  →  ~3 children per parent.
     # A 15-page PDF ≈ 45 parents ≈ 135 children  →  5 batches of 30 → well under 100 RPM.
-    PARENT_CHUNK_SIZE: int = 800
-    PARENT_CHUNK_OVERLAP: int = 100
-    CHILD_CHUNK_SIZE: int = 250
-    CHILD_CHUNK_OVERLAP: int = 25
+    PARENT_CHUNK_SIZE: int = 3000
+    PARENT_CHUNK_OVERLAP: int = 300
+    CHILD_CHUNK_SIZE: int = 1000
+    CHILD_CHUNK_OVERLAP: int = 100
 
     @property
     def is_cloud_mode(self) -> bool:
