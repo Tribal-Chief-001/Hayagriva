@@ -50,6 +50,8 @@ def get_vector_store(embeddings):
                 def add_texts(self, texts, metadatas=None, **kwargs):
                     print("[VectorStore] Cannot add texts: Qdrant connection failed.")
                     return []
+                def add_documents(self, documents, **kwargs):
+                    raise ValueError("Qdrant connection failed. Check your QDRANT_URL and QDRANT_API_KEY environment variables in your Vercel project Settings.")
             return DummyVectorStore()
     else:
         if os.getenv("VERCEL") == "1":
@@ -68,6 +70,8 @@ def get_vector_store(embeddings):
                 def add_texts(self, texts, metadatas=None, **kwargs):
                     print("[VectorStore] Cannot add texts: Vector store is inactive on Vercel (missing Qdrant credentials).")
                     return []
+                def add_documents(self, documents, **kwargs):
+                    raise ValueError("Qdrant credentials missing. Set QDRANT_URL and QDRANT_API_KEY environment variables in your Vercel project Settings.")
             return DummyVectorStore()
 
         print(f"[VectorStore] Initializing Local Chroma Vector Store at: {settings.CHROMA_DB_DIR}")
