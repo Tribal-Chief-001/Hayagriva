@@ -1,15 +1,70 @@
 import os
+import time
+from langchain_core.embeddings import Embeddings
 from src.config import settings
+
+class RateLimitedGeminiEmbeddings(Embeddings):
+    def __init__(self, google_embeddings_instance):
+        self.embeddings = google_embeddings_instance
+
+    def embed_documents(self, texts):
+        # Batch and rate-limit embedding calls to stay within free-tier limits (100 RPM)
+        batch_size = 32
+        results = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            retries = 5
+            backoff = 2.0
+            while retries > 0:
+                try:
+                    batch_vectors = self.embeddings.embed_documents(batch)
+                    results.extend(batch_vectors)
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                        print(f"[Embeddings] Rate limit hit (429/RESOURCE_EXHAUSTED). Retrying in {backoff:.2f}s... ({retries} retries left)")
+                        time.sleep(backoff)
+                        retries -= 1
+                        backoff *= 2.0
+                    else:
+                        raise e
+            else:
+                raise RuntimeError("Failed to embed documents after multiple retries due to rate limits.")
+            
+            # Sleep briefly between batches if there are more remaining
+            if i + batch_size < len(texts):
+                time.sleep(1.0)
+                
+        return results
+
+    def embed_query(self, text):
+        retries = 5
+        backoff = 2.0
+        while retries > 0:
+            try:
+                return self.embeddings.embed_query(text)
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    print(f"[Embeddings] Rate limit hit on query. Retrying in {backoff:.2f}s... ({retries} retries left)")
+                    time.sleep(backoff)
+                    retries -= 1
+                    backoff *= 2.0
+                else:
+                    raise e
+        raise RuntimeError("Failed to embed query after multiple retries due to rate limits.")
 
 def get_embeddings():
     """Initializes embeddings depending on active mode (Local vs. Cloud)."""
     if settings.is_cloud_mode:
         print("[VectorStore] Initializing Gemini Embeddings (Cloud Mode)")
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
-        return GoogleGenerativeAIEmbeddings(
+        raw_embeddings = GoogleGenerativeAIEmbeddings(
             model=settings.GEMINI_EMBEDDING_MODEL,
             google_api_key=settings.GEMINI_API_KEY
         )
+        return RateLimitedGeminiEmbeddings(raw_embeddings)
     else:
         print("[VectorStore] Initializing Hugging Face Sentence-Transformers Embeddings (Local Mode)")
         from langchain_huggingface import HuggingFaceEmbeddings
