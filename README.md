@@ -1,115 +1,154 @@
-# Hayagriva: Hybrid Conversational RAG Oracle
+<div align="center">
+  
+  # 🐴 H A Y A G R I V A
+  
+  ### *The Editorial, SOTA Hybrid Conversational RAG Oracle*
+  
+  [![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+  [![LangChain](https://img.shields.io/badge/LangChain-1C3C3A?style=for-the-badge&logo=chainlink&logoColor=white)](https://python.langchain.com/)
+  [![ChromaDB](https://img.shields.io/badge/ChromaDB-3F3D56?style=for-the-badge&logo=databricks&logoColor=white)](https://www.trychroma.com/)
+  [![Ollama](https://img.shields.io/badge/Ollama-000000?style=for-the-badge&logo=linux&logoColor=white)](https://ollama.com/)
+  [![Vercel](https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://vercel.com/)
 
-Hayagriva is a premium, near-SOTA Retrieval-Augmented Generation (RAG) platform. It features a local-first architecture built with **FastAPI**, **LangChain**, and **ChromaDB**, designed to run completely locally on CPU/Ollama or deploy serverlessly to **Vercel** using Cloud APIs (Gemini + Qdrant Cloud).
+  *A local-first, cloud-serverless hybrid conversational knowledge engine engineered to resolve RAG constraints using reciprocal rank fusion, parent-document injection, and cross-encoder re-ranking.*
 
-The system features an **"Editorial Neo-Minimalism"** glassmorphic dashboard interface, utilizing elegant serif typography (*Cormorant Garamond*) and a sliding annotation drawer to display verbatim citations from indexed documents.
+</div>
 
 ---
 
-## ── Key Architectural Features
+## ── Architectural Overview
 
-*   **Stage 1: Hybrid Retrieval:** Integrates **BM25 Sparse Retrieval** (for exact keyword/terminology matching) and **Dense Vector Embeddings** (Chroma/Qdrant using `all-MiniLM-L6-v2` for semantic concepts).
-*   **Stage 2: Reciprocal Rank Fusion (RRF):** Blends dense and sparse retrieval ranks dynamically using the RRF algorithm, securing matches that naive semantic vector search misses.
-*   **Stage 3: Parent-Document Retrieval:** Chunks are stored hierarchically: child nodes (200 characters) are embedded for high-precision search, but are swapped with their larger parent nodes (1000 characters) during retrieval, giving the LLM rich narrative context.
-*   **Stage 4: Cross-Encoder Re-ranking:** Employs `cross-encoder/ms-marco-MiniLM-L-6-v2` on CPU to re-score candidate parent documents, mitigating the "lost-in-the-middle" context window dilution problem.
-*   **Conversational Query Condensation:** Utilizes multi-turn chat history to rephrase pronoun-dependent follow-up questions into standalone queries before hitting retrieval.
-*   **Real-time Streaming:** Leverages FastAPI and the Javascript Streams API to deliver token-by-token streaming via Server-Sent Events (SSE).
+Naive RAG pipelines suffer from word-matching limitations (semantic search missing exact keywords), context dilution (passing small chunks that lack surrounding context), and the "lost-in-the-middle" LLM attention degradation. 
 
----
+**Hayagriva** implements a SOTA **4-Stage Retrieval & Re-ranking Pipeline** to solve these bottlenecks:
 
-## ── System Diagram
-
+```mermaid
+graph TD
+    user_query[User Query] --> stage1{Stage 1: Hybrid Retrieval}
+    
+    %% Sparse & Dense Retrievers
+    stage1 -->|Dense Vector Search| chroma[(Chroma DB / Qdrant)]
+    stage1 -->|Sparse Keyword Search| bm25[BM25 Retriever]
+    
+    chroma -->|Top 10 Chunks| stage2[Stage 2: Ensemble Retriever]
+    bm25 -->|Top 10 Chunks| stage2
+    
+    %% Reciprocal Rank Fusion & Re-ranking
+    stage2 -->|RRF Fusion| top_merged[Top 15 Merged Chunks]
+    top_merged -->|Retrieve Full Context| stage3[Stage 3: Parent Document Lookup]
+    stage3 -->|Parent Paragraphs| stage4[Stage 4: Cross-Encoder Re-ranker]
+    
+    %% Output
+    stage4 -->|Top 3 Re-ranked Contexts| prompt[Contextual Prompt]
+    prompt -->|Streaming Response| llm[LLM / Chat Model]
 ```
-[User Query]
-     │
-     ▼
-[Stage 1: Hybrid Retrieval] ──► Dense Vector (Chroma) & Sparse Keyword (BM25)
-     │
-     ▼
-[Stage 2: RRF Merging]       ──► Reciprocal Rank Fusion of child chunks (top 15)
-     │
-     ▼
-[Stage 3: Parent Lookup]    ──► Swapping retrieved 200-char children with 1000-char parents
-     │
-     ▼
-[Stage 4: Re-ranking]       ──► Re-scoring parent documents via local CPU Cross-Encoder
-     │
-     ▼
-[Generation Stream]         ──► Chat memory rephrasing + FastAPI Server-Sent Events (SSE)
-```
+
+### The 4 Pipeline Stages
+1.  **Stage 1: Hybrid Search:** Runs a parallel search using **Okapi BM25** (for exact keyword/phrase recall) and **Dense Embeddings** (via `all-MiniLM-L6-v2` for conceptual semantic matching).
+2.  **Stage 2: Reciprocal Rank Fusion (RRF):** Merges Dense and Sparse ranking lists using RRF scoring to optimize results.
+3.  **Stage 3: Parent-Document In-Metadata Injection:** Embeds small child chunks (200 chars) for precise retrieval, but stores the full parent paragraph (1000 chars) in the child chunk's metadata payload. Upon retrieval, the child chunk is swapped for its parent text, giving the LLM rich context.
+4.  **Stage 4: Cross-Encoder Re-ranking:** Re-scores parent documents using `ms-marco-MiniLM-L-6-v2` to evaluate token-level joint self-attention, mitigating LLM positioning bias.
 
 ---
 
-## ── File Structure
+## ── Design Language: "Editorial Neo-Minimalism"
+
+Hayagriva replaces default chat bubbles with an **editorial, scholarly table-of-contents layout**:
+
+*   **Typographic Hierarchy:** Combines the luxury serif **Cormorant Garamond** (for user queries and text paragraphs) with **JetBrains Mono** (for metadata, file details, and footnote numbers) to create a clean, academic look.
+*   **Tactile Animations:** Micro-interactions (hover scale transitions, pulsing state glows, and slide-in drawer menus) built with custom easing curves (`cubic-bezier(0.16, 1, 0.3, 1)`).
+*   **Exegesis Panel:** Footnote citations (e.g. `[P.26]`) slide-open a side drawer displaying the verbatim text snippet used for the answer, alongside relevance scores and source document names.
+
+---
+
+## ── Directory Structure
 
 ```
 Hayagriva/
 ├── data/
-│   ├── documents/              # Place PDF, TXT, or MD files here
-│   └── store/                  # Local store for Parent Documents (JSON-based)
-├── static/                     # Premium Front-End UI
-│   ├── index.html              # Classical editorial dashboard
+│   ├── documents/              # Directory for source files (.pdf, .txt, .md)
+│   └── store/                  # Ingestion log cache
+├── static/                     # Glassmorphic Front-End
+│   ├── index.html              # Classical editorial interface
 │   ├── style.css               # Obsidian & Bronze styling
-│   └── app.js                  # Asynchronous SSE stream receiver
-├── src/                        # Backend Source
-│   ├── config.py               # Settings manager (reads environment)
+│   └── app.js                  # SSE Stream receiver
+├── src/                        # FastAPI Application
+│   ├── config.py               # Settings manager (loads environment)
 │   ├── vector_store.py         # Embedding & database configurations
 │   ├── reranker.py             # Local Cross-Encoder re-ranker
-│   ├── ingest.py               # Incremental file scanning pipeline
-│   └── api.py                  # FastAPI routing & SSE streams
-├── main.py                     # Entry launcher
-├── vercel.json                 # Vercel deployment routing configuration
-└── requirements.txt            # Package dependencies
+│   ├── ingest.py               # Incremental byte-level ingester
+│   └── api.py                  # API endpoints and SSE streams
+├── main.py                     # Entry point
+├── vercel.json                 # Vercel deployment spec
+└── requirements.txt            # Project dependencies
 ```
 
 ---
 
-## ── Local Installation & Setup
+## ── Quick Start
 
-1.  **Clone the Repository:**
-    ```bash
-    git clone https://github.com/your-username/Hayagriva.git
-    cd Hayagriva
-    ```
+### 1. Installation
+```bash
+git clone https://github.com/your-username/Hayagriva.git
+cd Hayagriva
 
-2.  **Create a Virtual Environment:**
-    ```bash
-    python3 -m venv venv
-    source venv/bin/activate
-    ```
+# Initialize virtualenv
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-3.  **Install Dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
+### 2. Ollama Pull (Local LLM)
+Make sure [Ollama](https://ollama.com/) is running:
+```bash
+ollama pull qwen3.5:2b
+```
 
-4.  **Ollama Configuration:**
-    Make sure [Ollama](https://ollama.com/) is installed and running, then pull the model:
-    ```bash
-    ollama pull qwen3.5:2b
-    ```
+### 3. Run Ingestion (Local)
+Place your PDFs inside `data/documents/` and index them:
+```bash
+python -m src.ingest
+```
 
-5.  **Run Ingestion:**
-    Place your PDFs inside `data/documents/` and index them:
-    ```bash
-    python -m src.ingest
-    ```
-
-6.  **Start the Server:**
-    ```bash
-    python main.py
-    ```
-    Open **`http://localhost:8000`** in your browser.
+### 4. Launch the Server
+```bash
+python main.py
+```
+Open **`http://localhost:8000`** in your browser.
 
 ---
 
-## ── Vercel Serverless Deployment
+## ── API Reference
 
-To deploy this project to Vercel in **Cloud Mode** (which swaps local models for Cloud API calls to stay within Vercel's size limits):
+### `POST /api/chat`
+Streams LLM completion tokens and source metadata.
+*   **Request Body:**
+    ```json
+    { "message": "What is morality?", "session_id": "session-123" }
+    ```
+*   **Response Stream:** `text/event-stream` yielding events `sources`, `token`, and `done`.
 
-1.  Create a project on [Vercel](https://vercel.com).
-2.  Set the following **Environment Variables** in your Vercel Dashboard:
-    *   `GEMINI_API_KEY`: Your Google Gemini API Key.
-    *   *(Optional)* `COHERE_API_KEY`: To enable cloud-based re-ranking.
-    *   *(Optional)* `QDRANT_URL` & `QDRANT_API_KEY`: To connect to Qdrant Cloud.
-3.  Deploy the repository. Vercel will build the Python API functions automatically.
+### `POST /api/upload`
+Uploads and indexes a new document at runtime.
+*   **Request Type:** `multipart/form-data`
+*   **Payload:** `file: UploadFile`
+
+### `GET /api/documents`
+Lists all currently indexed files.
+*   **Response:**
+    ```json
+    { "documents": [ { "filename": "kant.pdf", "hash": "6bd5d6..." } ] }
+    ```
+
+---
+
+## ── Serverless Vercel Deploy
+
+Hayagriva automatically switches to **Cloud Mode** when it detects a `GEMINI_API_KEY` in the environment, bypassing local heavy libraries (like PyTorch and Ollama) to run serverlessly.
+
+1.  Import your GitHub repository to **Vercel**.
+2.  Set the following **Environment Variables**:
+    *   `GEMINI_API_KEY`: Your Google Gemini Key (Required).
+    *   `QDRANT_URL`: Your Qdrant Cloud Cluster endpoint (Required for dynamic uploads).
+    *   `QDRANT_API_KEY`: Your Qdrant Cloud API key.
+3.  Deploy. Vercel will host the FastAPI server and front-end assets on the free tier.
