@@ -5,8 +5,8 @@ def get_embeddings():
     """Initializes embeddings depending on active mode (Local vs. Cloud)."""
     if settings.is_cloud_mode:
         print("[VectorStore] Initializing Gemini Embeddings (Cloud Mode)")
-        from langchain_google_genai import GoogleGenAIEmbeddings
-        return GoogleGenAIEmbeddings(
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+        return GoogleGenerativeAIEmbeddings(
             model=settings.GEMINI_EMBEDDING_MODEL,
             google_api_key=settings.GEMINI_API_KEY
         )
@@ -22,17 +22,35 @@ def get_vector_store(embeddings):
     """Initializes and returns the child-chunk vector store (Chroma or Qdrant)."""
     if settings.is_qdrant_mode:
         print("[VectorStore] Initializing Qdrant Cloud Vector Store")
-        from langchain_community.vectorstores import Qdrant
+        from langchain_qdrant import QdrantVectorStore
         import qdrant_client
-        client = qdrant_client.QdrantClient(
-            url=settings.QDRANT_URL,
-            api_key=settings.QDRANT_API_KEY
-        )
-        return Qdrant(
-            client=client,
-            collection_name="hayagriva_child_chunks",
-            embeddings=embeddings
-        )
+        try:
+            client = qdrant_client.QdrantClient(
+                url=settings.QDRANT_URL,
+                api_key=settings.QDRANT_API_KEY
+            )
+            return QdrantVectorStore(
+                client=client,
+                collection_name="hayagriva_child_chunks",
+                embedding=embeddings
+            )
+        except Exception as e:
+            print(f"[VectorStore] WARNING: Failed to initialize Qdrant Cloud Vector Store ({e}). Falling back to dummy storage to prevent startup crash.")
+            class DummyVectorStore:
+                client = None
+                collection_name = "hayagriva_child_chunks"
+                def as_retriever(self, **kwargs):
+                    class DummyRetriever:
+                        def invoke(self, query):
+                            print("[VectorStore] Retrieval skipped: Qdrant connection failed.")
+                            return []
+                    return DummyRetriever()
+                def get(self):
+                    return {"documents": [], "metadatas": []}
+                def add_texts(self, texts, metadatas=None, **kwargs):
+                    print("[VectorStore] Cannot add texts: Qdrant connection failed.")
+                    return []
+            return DummyVectorStore()
     else:
         if os.getenv("VERCEL") == "1":
             print("[VectorStore] WARNING: Running on Vercel without Qdrant Cloud credentials. Chroma is unsupported on Vercel.")
