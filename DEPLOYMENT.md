@@ -51,7 +51,7 @@ To support dynamic uploads at runtime on your live website, you must connect the
     *   Copy the **Cluster URL** endpoint (e.g. `https://xxx-xxxx.aws.qdrant.io:6333`).
 2.  **Get a Google Gemini API Key:**
     *   Sign up at [Google AI Studio](https://aistudio.google.com/).
-    *   Generate a free API key to run LLM (`gemini-1.5-flash`) and embeddings (`models/text-embedding-004`).
+    *   Generate a free API key to run LLM (`gemini-3.5-flash`) and embeddings (`gemini-embedding-2`).
 
 ---
 

@@ -37,7 +37,7 @@ def get_status():
             "is_cloud_mode": settings.is_cloud_mode,
             "is_qdrant_mode": settings.is_qdrant_mode,
             "llm_model": settings.GEMINI_LLM_MODEL if settings.is_cloud_mode else settings.OLLAMA_MODEL_NAME,
-            "embeddings": "models/text-embedding-004 (Gemini)" if settings.is_cloud_mode else settings.EMBEDDING_MODEL_NAME,
+            "embeddings": f"{settings.GEMINI_EMBEDDING_MODEL} (Gemini)" if settings.is_cloud_mode else settings.EMBEDDING_MODEL_NAME,
             "vector_store": "Qdrant Cloud" if settings.is_qdrant_mode else "Chroma DB (Local)"
         }
     }

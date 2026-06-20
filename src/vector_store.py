@@ -8,7 +8,7 @@ def get_embeddings():
         print("[VectorStore] Initializing Gemini Embeddings (Cloud Mode)")
         from langchain_google_genai import GoogleGenAIEmbeddings
         return GoogleGenAIEmbeddings(
-            model="models/text-embedding-004",
+            model=settings.GEMINI_EMBEDDING_MODEL,
             google_api_key=settings.GEMINI_API_KEY
         )
     else:
