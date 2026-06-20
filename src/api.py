@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from src.config import settings
-from src.ingest import run_ingestion, get_ingestion_log, ingest_document_bytes
+from src.ingest import run_ingestion, get_ingestion_log, ingest_document_bytes, delete_document_from_db, purge_entire_db
 from src.rag_engine import RAGEngine
 
 app = FastAPI(title="Hayagriva API", description="Hybrid RAG Knowledge Engine API")
@@ -153,6 +153,28 @@ def list_documents():
         }
     except Exception as e:
         return {"documents": [], "error": str(e)}
+
+
+@app.delete("/api/documents/{filename}")
+def delete_document(filename: str):
+    """Deletes a specific document from the vector database and log."""
+    try:
+        delete_document_from_db(filename)
+        rag_engine.refresh_bm25_retriever()
+        return {"status": "success", "message": f"Document '{filename}' deleted."}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+
+@app.post("/api/purge_db")
+def purge_db():
+    """Wipes the entire vector database and ingestion log."""
+    try:
+        purge_entire_db()
+        rag_engine.refresh_bm25_retriever()
+        return {"status": "success", "message": "Database completely purged and reset."}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 
 # ---------------------------------------------------------------------------

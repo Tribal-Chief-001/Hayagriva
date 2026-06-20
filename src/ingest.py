@@ -142,6 +142,84 @@ def upsert_log_entry(filename: str, file_hash: str):
             print(f"[Ingest] Warning: could not upsert log entry into Qdrant: {e}")
 
 
+def delete_document_from_db(filename: str):
+    """Deletes all chunks for a specific file and removes its log entry."""
+    if settings.is_qdrant_mode:
+        client = _get_qdrant_client()
+        if client:
+            from qdrant_client.http import models as qmodels
+            # Delete content chunks by source metadata
+            client.delete(
+                collection_name=settings.QDRANT_COLLECTION,
+                points_selector=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="metadata.source",
+                            match=qmodels.MatchValue(value=filename)
+                        )
+                    ]
+                )
+            )
+            # Delete log entry
+            point_id = int(hashlib.md5(f"log:{filename}".encode()).hexdigest(), 16) % (2**63)
+            client.delete(
+                collection_name=settings.QDRANT_COLLECTION,
+                points_selector=[point_id]
+            )
+            print(f"[Ingest] Document '{filename}' deleted from Qdrant.")
+            
+    # Remove from local log if exists
+    try:
+        import json
+        if _LOCAL_LOG_PATH.exists():
+            with open(_LOCAL_LOG_PATH, "r") as f:
+                log = json.load(f)
+            if filename in log:
+                del log[filename]
+                save_ingestion_log(log)
+    except Exception:
+        pass
+
+
+def purge_entire_db():
+    """Drops the entire Qdrant collection to completely wipe the database."""
+    if settings.is_qdrant_mode:
+        client = _get_qdrant_client()
+        if client:
+            from qdrant_client.http import models as qdrant_models
+            try:
+                client.delete_collection(collection_name=settings.QDRANT_COLLECTION)
+                print(f"[Ingest] Collection '{settings.QDRANT_COLLECTION}' deleted.")
+            except Exception:
+                pass
+            
+            # Recreate empty collection
+            client.create_collection(
+                collection_name=settings.QDRANT_COLLECTION,
+                vectors_config=qdrant_models.VectorParams(
+                    size=settings.EMBEDDING_DIM,
+                    distance=qdrant_models.Distance.COSINE
+                )
+            )
+            # Create payload index on source for fast deletion in future
+            try:
+                client.create_payload_index(
+                    collection_name=settings.QDRANT_COLLECTION,
+                    field_name="metadata.source",
+                    field_schema=qdrant_models.PayloadSchemaType.KEYWORD
+                )
+            except Exception:
+                pass
+            print(f"[Ingest] Collection '{settings.QDRANT_COLLECTION}' recreated with payload index.")
+            
+    # Clear local log
+    try:
+        if _LOCAL_LOG_PATH.exists():
+            _LOCAL_LOG_PATH.unlink()
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Chunking helpers
 # ---------------------------------------------------------------------------

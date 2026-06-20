@@ -10,11 +10,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const systemMode = document.getElementById("system-mode");
     const modeText = document.getElementById("mode-text");
     const modelText = document.getElementById("model-text");
+    const clearBtn = document.getElementById("clear-btn");
+    const nukeBtn = document.getElementById("nuke-btn");
     const docList = document.getElementById("doc-list");
     const refreshDocsBtn = document.getElementById("refresh-docs-btn");
     const ingestBtn = document.getElementById("ingest-btn");
     const ingestSpinner = document.getElementById("ingest-spinner");
-    const clearBtn = document.getElementById("clear-btn");
     const chatMessages = document.getElementById("chat-messages");
     const typingIndicator = document.getElementById("typing-indicator");
     const chatForm = document.getElementById("chat-form");
@@ -129,7 +130,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Clear Chat History & reset session
     clearBtn.addEventListener("click", () => {
-        if (confirm("Are you sure you want to purge the current scroll? This resets the server memory.")) {
+        if (confirm("Are you sure you want to clear the chat history?")) {
             sessionId = generateUUID();
             updateSessionMonogram();
             
@@ -141,6 +142,26 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         }
     });
+
+    // Nuke entire database
+    if (nukeBtn) {
+        nukeBtn.addEventListener("click", async () => {
+            if (confirm("WARNING: Are you absolutely sure you want to wipe the ENTIRE vector database? This cannot be undone.")) {
+                try {
+                    const res = await fetch("/api/purge_db", { method: "POST" });
+                    if (res.ok) {
+                        alert("Database successfully nuked and rebuilt.");
+                        fetchDocuments();
+                    } else {
+                        const data = await res.json();
+                        alert("Failed to nuke database: " + data.message);
+                    }
+                } catch (e) {
+                    alert("Error: " + e.message);
+                }
+            }
+        });
+    }
 
     // Submit Query
     chatForm.addEventListener("submit", async (e) => {
@@ -216,10 +237,37 @@ document.addEventListener("DOMContentLoaded", () => {
                 const li = document.createElement("li");
                 li.className = "doc-item";
                 li.innerHTML = `
-                    <i class="fa-regular fa-file-pdf"></i>
-                    <span class="doc-name" title="${doc.filename}">${doc.filename}</span>
-                    <span class="doc-hash">${doc.hash}</span>
+                    <div style="display: flex; align-items: center; gap: 8px; width: 100%;">
+                        <i class="fa-regular fa-file-pdf"></i>
+                        <span class="doc-name" title="${doc.filename}" style="flex-grow: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${doc.filename}</span>
+                        <button class="delete-doc-btn" data-filename="${doc.filename}" title="Delete file from database" style="background: none; border: none; color: #ff4a4a; cursor: pointer; padding: 0 5px;">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
                 `;
+                
+                // Add delete listener
+                const delBtn = li.querySelector(".delete-doc-btn");
+                delBtn.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    if (confirm(`Are you sure you want to delete '${doc.filename}' from the database?`)) {
+                        delBtn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i>';
+                        try {
+                            const res = await fetch(`/api/documents/${encodeURIComponent(doc.filename)}`, { method: "DELETE" });
+                            if (res.ok) {
+                                fetchDocuments();
+                            } else {
+                                const data = await res.json();
+                                alert("Failed to delete: " + data.message);
+                                delBtn.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
+                            }
+                        } catch (err) {
+                            alert("Error deleting document: " + err.message);
+                            delBtn.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
+                        }
+                    }
+                });
+
                 docList.appendChild(li);
             });
         } catch (err) {
