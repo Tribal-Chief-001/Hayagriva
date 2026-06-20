@@ -9,7 +9,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.config import settings
 from src.graph_store import get_graph
-from src.ingest import ingest_document_bytes
+from src.ingest import ingest_document_bytes, delete_document_from_db
 
 def extract_and_upload_graph(file_path: str):
     print(f"============================================================")
@@ -25,8 +25,14 @@ def extract_and_upload_graph(file_path: str):
         print("[ERROR] Failed to connect to Neo4j database.")
         return
 
-    # 0. Upload to Qdrant (Vector Database) First
-    print(f"[*] Phase 1: Uploading to Qdrant Vector Database...")
+    filename = Path(file_path).name
+
+    # 0. Clean any existing entries (Idempotence check to prevent duplicates)
+    print(f"[*] Phase 1: Cleaning existing entries for {filename} to prevent duplicates...")
+    delete_document_from_db(filename)
+
+    # 1. Upload to Qdrant (Vector Database) First
+    print(f"\n[*] Phase 2: Uploading to Qdrant Vector Database...")
     try:
         with open(file_path, "rb") as f:
             file_bytes = f.read()
@@ -34,14 +40,14 @@ def extract_and_upload_graph(file_path: str):
         # We temporarily set VERCEL=0 to ensure the ingest script uses local rate-limits (20s sleep) 
         # instead of Vercel's fast-fail rate limits.
         os.environ["VERCEL"] = "0"
-        result = ingest_document_bytes(file_bytes, Path(file_path).name)
+        result = ingest_document_bytes(file_bytes, filename)
         print(f"[*] Qdrant Upload Success: {result['chunks']} chunks indexed.")
     except Exception as e:
         print(f"[ERROR] Failed to upload to Qdrant: {e}")
         print(f"[*] Proceeding to Graph Extraction anyway...")
 
-    # 1. Load document for Graph Extraction
-    print(f"\n[*] Phase 2: Loading document for Neo4j Graph Extraction: {file_path}")
+    # 2. Load document for Graph Extraction
+    print(f"\n[*] Phase 3: Loading document for Neo4j Graph Extraction: {file_path}")
     ext = Path(file_path).suffix.lower()
     if ext == ".pdf":
         loader = PyPDFLoader(file_path)

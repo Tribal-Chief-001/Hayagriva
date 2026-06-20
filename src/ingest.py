@@ -180,7 +180,11 @@ def delete_document_from_db(filename: str):
                     "MATCH (d:Document) WHERE d.source = $filename DETACH DELETE d",
                     params={"filename": filename}
                 )
-                print(f"[Ingest] Document '{filename}' nodes deleted from Neo4j.")
+                # Clean up any orphaned Entity nodes that are no longer mentioned by any Document
+                graph.query(
+                    "MATCH (e:`__Entity__`) WHERE NOT (e)<-[:MENTIONS]-() DETACH DELETE e"
+                )
+                print(f"[Ingest] Document '{filename}' nodes and orphans deleted from Neo4j.")
             except Exception as e:
                 print(f"[Ingest] Warning: Could not delete from Neo4j: {e}")
             
