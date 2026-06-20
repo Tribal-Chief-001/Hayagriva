@@ -1,177 +1,382 @@
 import os
 import tempfile
 import hashlib
-import json
 from pathlib import Path
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
 from src.config import settings
 from src.vector_store import get_embeddings, get_vector_store
 
-INGESTION_LOG_PATH = Path(settings.PARENT_STORE_DIR) / "ingestion_log.json"
+# ---------------------------------------------------------------------------
+# Ingestion Log — stored inside Qdrant as a tagged "__meta__" document so it
+# survives Vercel's read-only / ephemeral filesystem.
+# Locally we also mirror it to disk for fast reads.
+# ---------------------------------------------------------------------------
 
-def calculate_sha256(file_path: Path) -> str:
-    """Calculates the SHA-256 hash of a file to detect changes."""
-    sha256_hash = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()
+_LOG_COLLECTION_TAG = "__ingestion_log__"
+_LOCAL_LOG_PATH = Path(settings.PARENT_STORE_DIR) / "ingestion_log.json"
+
+
+def _get_qdrant_client():
+    """Returns a raw qdrant_client if in Qdrant mode, else None."""
+    if not settings.is_qdrant_mode:
+        return None
+    try:
+        import qdrant_client
+        return qdrant_client.QdrantClient(
+            url=settings.QDRANT_URL,
+            api_key=settings.QDRANT_API_KEY,
+            timeout=8
+        )
+    except Exception as e:
+        print(f"[Ingest] Warning: could not connect to Qdrant for log ops: {e}")
+        return None
+
 
 def get_ingestion_log() -> dict:
-    """Reads the ingestion log containing filename-to-hash mappings."""
-    if INGESTION_LOG_PATH.exists():
+    """
+    Returns the filename→sha256 map of all ingested documents.
+    Reads from Qdrant payload first (cloud-safe), falls back to disk.
+    """
+    # Try Qdrant-based log — scroll ALL points and filter in Python
+    # (avoids requiring a payload index on metadata.tag)
+    if settings.is_qdrant_mode:
         try:
-            with open(INGESTION_LOG_PATH, "r") as f:
-                return json.load(f)
+            client = _get_qdrant_client()
+            if client:
+                log = {}
+                offset = None
+                while True:
+                    batch, next_offset = client.scroll(
+                        collection_name=settings.QDRANT_COLLECTION,
+                        limit=500,
+                        offset=offset,
+                        with_payload=True,
+                        with_vectors=False
+                    )
+                    for point in batch:
+                        payload = point.payload or {}
+                        meta = payload.get("metadata", {})
+                        if meta.get("tag") == _LOG_COLLECTION_TAG:
+                            fname = meta.get("filename")
+                            fhash = meta.get("hash")
+                            if fname and fhash:
+                                log[fname] = fhash
+                    if next_offset is None:
+                        break
+                    offset = next_offset
+                return log
         except Exception as e:
-            print(f"[Ingest] Error reading ingestion log: {e}")
-            return {}
+            print(f"[Ingest] Could not read Qdrant ingestion log: {e}")
+
+    # Fallback: local disk (works locally, silently fails on Vercel)
+    try:
+        import json
+        if _LOCAL_LOG_PATH.exists():
+            with open(_LOCAL_LOG_PATH, "r") as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"[Ingest] Could not read local ingestion log: {e}")
+
     return {}
 
+
 def save_ingestion_log(log: dict):
-    """Saves the ingestion log containing filename-to-hash mappings."""
+    """Persist log to disk (local only — Vercel uses Qdrant directly in upsert_log_entry)."""
     try:
-        # Ensure parent directories exist
-        os.makedirs(INGESTION_LOG_PATH.parent, exist_ok=True)
-        with open(INGESTION_LOG_PATH, "w") as f:
+        import json
+        os.makedirs(_LOCAL_LOG_PATH.parent, exist_ok=True)
+        with open(_LOCAL_LOG_PATH, "w") as f:
             json.dump(log, f, indent=4)
     except Exception as e:
-        print(f"[Ingest] Error writing ingestion log: {e}")
+        print(f"[Ingest] Skipping local log write (read-only env): {e}")
 
-def split_and_inject_parent(pages, parent_splitter, child_splitter) -> list:
-    """Splits pages into parents, then parents into children, injecting parent text into children metadata."""
-    # 1. Split pages into parent documents
+
+def upsert_log_entry(filename: str, file_hash: str):
+    """
+    Records a successfully ingested document in the Qdrant store as a tagged
+    metadata-only record (zero vector, safe sentinel approach using a dummy payload).
+    Also mirrors to disk when possible.
+    """
+    # Mirror to disk
+    try:
+        import json
+        log = {}
+        if _LOCAL_LOG_PATH.exists():
+            with open(_LOCAL_LOG_PATH, "r") as f:
+                log = json.load(f)
+        log[filename] = file_hash
+        save_ingestion_log(log)
+    except Exception:
+        pass
+
+    # Upsert into Qdrant as a tagged dummy point
+    if settings.is_qdrant_mode:
+        try:
+            import qdrant_client
+            from qdrant_client.http import models as qmodels
+            client = _get_qdrant_client()
+            if client:
+                # Use a deterministic ID based on filename so upsert is idempotent
+                point_id = int(hashlib.md5(f"log:{filename}".encode()).hexdigest(), 16) % (2**63)
+                client.upsert(
+                    collection_name=settings.QDRANT_COLLECTION,
+                    points=[
+                        qmodels.PointStruct(
+                            id=point_id,
+                            vector=[0.0] * settings.EMBEDDING_DIM,
+                            payload={
+                                "page_content": f"[LOG] {filename}",
+                                "metadata": {
+                                    "tag": _LOG_COLLECTION_TAG,
+                                    "filename": filename,
+                                    "hash": file_hash
+                                }
+                            }
+                        )
+                    ]
+                )
+                print(f"[Ingest] Log entry upserted into Qdrant for '{filename}'.")
+        except Exception as e:
+            print(f"[Ingest] Warning: could not upsert log entry into Qdrant: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Chunking helpers
+# ---------------------------------------------------------------------------
+
+def split_and_inject_parent(pages: list, parent_splitter, child_splitter) -> list:
+    """
+    Splits pages → parents → children, injecting each parent's raw text into
+    every child chunk's metadata for later parent-doc retrieval.
+    """
     parent_docs = parent_splitter.split_documents(pages)
-    
     child_docs = []
+
     for parent in parent_docs:
-        # Split this parent into child chunks
         children = child_splitter.split_documents([parent])
         for child in children:
-            # Inject parent text into the child chunk's metadata
             child.metadata["parent_text"] = parent.page_content
-            # Keep original source metadata
             child.metadata["source"] = parent.metadata.get("source", "Unknown")
             child.metadata["page"] = parent.metadata.get("page", 1)
             child_docs.append(child)
-            
+
     return child_docs
 
+
+# ---------------------------------------------------------------------------
+# Core ingestion entry-points
+# ---------------------------------------------------------------------------
+
 def ingest_document_bytes(file_bytes: bytes, filename: str) -> dict:
-    """Processes uploaded document bytes in-memory, splits and uploads to vector store."""
+    """
+    Processes a document from raw bytes (for API uploads).
+    Batches vector store writes in groups of 30 to stay within the
+    Gemini free-tier 100 RPM limit without any blocking sleep.
+    """
     suffix = Path(filename).suffix.lower()
-    
-    # Save the bytes to a temp file in /tmp (safe for Vercel/Serverless)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-        temp_file.write(file_bytes)
-        temp_path = temp_file.name
-        
+    if suffix not in {".pdf", ".txt", ".md"}:
+        raise ValueError(f"Unsupported file type '{suffix}'. Please upload a .pdf, .txt, or .md file.")
+
+    # Reject empty bytes before writing to /tmp
+    if not file_bytes:
+        raise ValueError(f"The uploaded file '{filename}' is empty (0 bytes).")
+
+    # Write to /tmp (writable on Vercel)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+
     try:
-        # Load documents based on file type
-        if suffix == ".pdf":
-            loader = PyPDFLoader(temp_path)
-        else:
-            loader = TextLoader(temp_path, encoding="utf-8")
-            
-        pages = loader.load()
-        
+        # Load — catch pypdf/IO errors and surface as clean ValueError
+        loader = PyPDFLoader(tmp_path) if suffix == ".pdf" else TextLoader(tmp_path, encoding="utf-8")
+        try:
+            pages = loader.load()
+        except Exception as load_err:
+            raise ValueError(
+                f"Could not parse '{filename}': {load_err}. "
+                "If this is a PDF, ensure it is not password-protected or image-only (scanned)."
+            ) from load_err
+
+        if not pages:
+            raise ValueError(f"Document '{filename}' appears to be empty or could not be parsed.")
+
         # Enrich metadata
         for i, page in enumerate(pages):
             page.metadata["source"] = filename
             if "page" not in page.metadata:
                 page.metadata["page"] = i + 1
-                
-        # Splitters
-        parent_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-        child_splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=30)
-        
+
+        # Chunk
+        parent_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=settings.PARENT_CHUNK_SIZE,
+            chunk_overlap=settings.PARENT_CHUNK_OVERLAP
+        )
+        child_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=settings.CHILD_CHUNK_SIZE,
+            chunk_overlap=settings.CHILD_CHUNK_OVERLAP
+        )
         child_docs = split_and_inject_parent(pages, parent_splitter, child_splitter)
-        
-        # Upload child chunks to vector store
-        embeddings = get_embeddings()
-        vector_store = get_vector_store(embeddings)
-        vector_store.add_documents(child_docs)
-        
-        # Track hash log locally if file-writing is allowed (e.g. locally)
-        try:
-            log = get_ingestion_log()
-            # Calculate hash from bytes
-            hasher = hashlib.sha256()
-            hasher.update(file_bytes)
-            log[filename] = hasher.hexdigest()
-            save_ingestion_log(log)
-        except Exception as e:
-            print(f"[Ingest] Skipping log update (read-only environment): {e}")
-            
-        print(f"[Ingest] In-memory upload of '{filename}' complete: {len(child_docs)} chunks added.")
-        return {
-            "status": "success",
-            "filename": filename,
-            "chunks": len(child_docs)
-        }
+
+        if not child_docs:
+            raise ValueError(f"No text could be extracted from '{filename}'. Is the PDF scanned/image-based?")
+
+        # Filter out log-tagged documents from Qdrant scroll so BM25 ignores them
+        content_docs = [d for d in child_docs if d.metadata.get("tag") != _LOG_COLLECTION_TAG]
+
+        on_vercel = os.getenv("VERCEL") == "1"
+        VERCEL_MAX_PAGES  = 8    # ~200 chunks for PDFs → ~10 embed calls
+        VERCEL_MAX_CHUNKS = 200  # Hard chunk ceiling for any file type
+
+        # Enforce limits on Vercel to prevent function timeout
+        if on_vercel:
+            if len(pages) > VERCEL_MAX_PAGES:
+                raise ValueError(
+                    f"Document has {len(pages)} pages — Vercel can only process up to "
+                    f"{VERCEL_MAX_PAGES} pages per upload. Please upload shorter documents "
+                    f"or run ingestion locally: python -m src.ingest"
+                )
+            if len(content_docs) > VERCEL_MAX_CHUNKS:
+                raise ValueError(
+                    f"Document produces {len(content_docs)} chunks — Vercel limit is "
+                    f"{VERCEL_MAX_CHUNKS}. Please upload shorter documents "
+                    f"or run ingestion locally: python -m src.ingest"
+                )
+
+        print(f"[Ingest] '{filename}': {len(pages)} pages → {len(content_docs)} child chunks. Uploading in batches...")
+
+        # --- Direct Qdrant upsert (bypasses LangChain's internal double-embedding) ---
+        # We embed each batch ourselves, build PointStructs, and upsert directly.
+        # This gives full control over rate limiting and avoids double-embedding.
+        if settings.is_qdrant_mode:
+            import qdrant_client as qc
+            from qdrant_client.http import models as qmodels
+            import uuid, time
+
+            raw_client = qc.QdrantClient(
+                url=settings.QDRANT_URL,
+                api_key=settings.QDRANT_API_KEY,
+                timeout=8
+            )
+            from langchain_google_genai import GoogleGenerativeAIEmbeddings
+            raw_emb = GoogleGenerativeAIEmbeddings(
+                model=settings.GEMINI_EMBEDDING_MODEL,
+                google_api_key=settings.GEMINI_API_KEY
+            )
+
+            BATCH_SIZE = 20
+            total_batches = -(-len(content_docs) // BATCH_SIZE)
+
+            for i in range(0, len(content_docs), BATCH_SIZE):
+                batch = content_docs[i:i + BATCH_SIZE]
+                batch_num = i // BATCH_SIZE + 1
+                print(f"[Ingest] Embedding batch {batch_num}/{total_batches} ({len(batch)} chunks)...")
+
+                texts = [d.page_content for d in batch]
+
+                # Retry with exponential backoff on transient 429s (local mode only)
+                retries, backoff = 5, 10.0
+                while True:
+                    try:
+                        vectors = raw_emb.embed_documents(texts)
+                        break
+                    except Exception as emb_err:
+                        err_str = str(emb_err)
+                        if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str) and retries > 0 and not on_vercel:
+                            print(f"[Ingest] Rate limit hit — retrying batch {batch_num} in {backoff:.0f}s ({retries} retries left)...")
+                            time.sleep(backoff)
+                            retries -= 1
+                            backoff *= 2.0
+                        else:
+                            raise
+
+                points = [
+                    qmodels.PointStruct(
+                        id=str(uuid.uuid4()),
+                        vector=vector,
+                        payload={
+                            "page_content": doc.page_content,
+                            "metadata": doc.metadata
+                        }
+                    )
+                    for doc, vector in zip(batch, vectors)
+                ]
+
+                raw_client.upsert(collection_name=settings.QDRANT_COLLECTION, points=points)
+                print(f"[Ingest] Batch {batch_num}/{total_batches} upserted.")
+
+                # On Vercel: no sleep (small docs only, within 100 RPM window)
+                # Locally: sleep 20s between batches for large docs
+                if not on_vercel and (i + BATCH_SIZE < len(content_docs)):
+                    time.sleep(20)
+
+        else:
+            # Local Chroma path — LangChain handles embedding internally
+            embeddings = get_embeddings()
+            vector_store = get_vector_store(embeddings)
+            for i in range(0, len(content_docs), 50):
+                vector_store.add_documents(content_docs[i:i + 50])
+
+
+        # Record in ingestion log
+        hasher = hashlib.sha256()
+        hasher.update(file_bytes)
+        upsert_log_entry(filename, hasher.hexdigest())
+
+        print(f"[Ingest] '{filename}' complete: {len(content_docs)} chunks indexed.")
+        return {"status": "success", "filename": filename, "chunks": len(content_docs)}
+
     finally:
-        # Clean up temp file
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
 
 def run_ingestion() -> dict:
-    """Scans settings.DOCUMENTS_DIR and ingests new/modified documents incrementally."""
+    """Scans DOCUMENTS_DIR and ingests new/modified documents incrementally."""
     doc_dir = Path(settings.DOCUMENTS_DIR)
     if not doc_dir.exists():
         os.makedirs(doc_dir, exist_ok=True)
         return {"status": "success", "message": "Documents directory created.", "ingested": [], "skipped": []}
-    
-    # Initialize RAG vector store
-    embeddings = get_embeddings()
-    vector_store = get_vector_store(embeddings)
-    
-    # Define parent and child splitters for Hierarchical / Parent-Child RAG
-    parent_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-    child_splitter = RecursiveCharacterTextSplitter(chunk_size=200, chunk_overlap=30)
-    
+
     log = get_ingestion_log()
-    ingested_files = []
-    skipped_files = []
-    
-    # Scan files in documents folder
-    supported_extensions = {".pdf", ".txt", ".md"}
-    files_to_process = [p for p in doc_dir.iterdir() if p.suffix.lower() in supported_extensions]
-    
-    if not files_to_process:
-        return {"status": "success", "message": "No documents found to process.", "ingested": [], "skipped": []}
-    
-    print(f"[Ingest] Found {len(files_to_process)} document(s) in {doc_dir}")
-    
-    for file_path in files_to_process:
-        filename = file_path.name
-        current_hash = calculate_sha256(file_path)
-        
-        # Check if file has already been ingested with the same hash
-        if filename in log and log[filename] == current_hash:
-            skipped_files.append(filename)
-            print(f"[Ingest] Skipped '{filename}' (already ingested and unchanged)")
+    supported = {".pdf", ".txt", ".md"}
+    files = [p for p in doc_dir.iterdir() if p.suffix.lower() in supported]
+
+    if not files:
+        return {"status": "success", "message": "No documents found.", "ingested": [], "skipped": []}
+
+    print(f"[Ingest] Found {len(files)} document(s) in {doc_dir}")
+    ingested, skipped = [], []
+
+    for file_path in files:
+        fname = file_path.name
+
+        # SHA-256 deduplication
+        sha = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for block in iter(lambda: f.read(4096), b""):
+                sha.update(block)
+        current_hash = sha.hexdigest()
+
+        if fname in log and log[fname] == current_hash:
+            skipped.append(fname)
+            print(f"[Ingest] Skipped '{fname}' (unchanged).")
             continue
-            
-        print(f"[Ingest] Ingesting '{filename}'...")
-        
+
+        print(f"[Ingest] Ingesting '{fname}'...")
         try:
-            # Read bytes to feed into ingest_document_bytes
             with open(file_path, "rb") as f:
                 file_bytes = f.read()
-                
-            ingest_document_bytes(file_bytes, filename)
-            ingested_files.append(filename)
-            
+            ingest_document_bytes(file_bytes, fname)
+            ingested.append(fname)
         except Exception as e:
-            print(f"[Ingest] Failed to ingest '{filename}': {e}")
-            
-    return {
-        "status": "success",
-        "ingested": ingested_files,
-        "skipped": skipped_files
-    }
+            print(f"[Ingest] Failed '{fname}': {e}")
+
+    return {"status": "success", "ingested": ingested, "skipped": skipped}
+
 
 if __name__ == "__main__":
+    import json
     result = run_ingestion()
     print("\nIngestion Summary:", json.dumps(result, indent=2))

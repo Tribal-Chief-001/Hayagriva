@@ -1,70 +1,16 @@
 import os
-import time
-from langchain_core.embeddings import Embeddings
 from src.config import settings
 
-class RateLimitedGeminiEmbeddings(Embeddings):
-    def __init__(self, google_embeddings_instance):
-        self.embeddings = google_embeddings_instance
-
-    def embed_documents(self, texts):
-        # Batch and rate-limit embedding calls to stay within free-tier limits (100 RPM)
-        batch_size = 32
-        results = []
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            retries = 5
-            backoff = 2.0
-            while retries > 0:
-                try:
-                    batch_vectors = self.embeddings.embed_documents(batch)
-                    results.extend(batch_vectors)
-                    break
-                except Exception as e:
-                    err_str = str(e)
-                    if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                        print(f"[Embeddings] Rate limit hit (429/RESOURCE_EXHAUSTED). Retrying in {backoff:.2f}s... ({retries} retries left)")
-                        time.sleep(backoff)
-                        retries -= 1
-                        backoff *= 2.0
-                    else:
-                        raise e
-            else:
-                raise RuntimeError("Failed to embed documents after multiple retries due to rate limits.")
-            
-            # Sleep briefly between batches if there are more remaining
-            if i + batch_size < len(texts):
-                time.sleep(1.0)
-                
-        return results
-
-    def embed_query(self, text):
-        retries = 5
-        backoff = 2.0
-        while retries > 0:
-            try:
-                return self.embeddings.embed_query(text)
-            except Exception as e:
-                err_str = str(e)
-                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    print(f"[Embeddings] Rate limit hit on query. Retrying in {backoff:.2f}s... ({retries} retries left)")
-                    time.sleep(backoff)
-                    retries -= 1
-                    backoff *= 2.0
-                else:
-                    raise e
-        raise RuntimeError("Failed to embed query after multiple retries due to rate limits.")
 
 def get_embeddings():
     """Initializes embeddings depending on active mode (Local vs. Cloud)."""
     if settings.is_cloud_mode:
         print("[VectorStore] Initializing Gemini Embeddings (Cloud Mode)")
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
-        raw_embeddings = GoogleGenerativeAIEmbeddings(
+        return GoogleGenerativeAIEmbeddings(
             model=settings.GEMINI_EMBEDDING_MODEL,
             google_api_key=settings.GEMINI_API_KEY
         )
-        return RateLimitedGeminiEmbeddings(raw_embeddings)
     else:
         print("[VectorStore] Initializing Hugging Face Sentence-Transformers Embeddings (Local Mode)")
         from langchain_huggingface import HuggingFaceEmbeddings
@@ -72,6 +18,7 @@ def get_embeddings():
             model_name=settings.EMBEDDING_MODEL_NAME,
             model_kwargs={"device": "cpu"}
         )
+
 
 def get_vector_store(embeddings):
     """Initializes and returns the child-chunk vector store (Chroma or Qdrant)."""
@@ -83,11 +30,12 @@ def get_vector_store(embeddings):
         try:
             client = qdrant_client.QdrantClient(
                 url=settings.QDRANT_URL,
-                api_key=settings.QDRANT_API_KEY
+                api_key=settings.QDRANT_API_KEY,
+                timeout=8  # Stay within Vercel's 10s limit
             )
-            collection_name = "hayagriva_child_chunks"
-            
-            # Check if collection exists; if not, create it automatically
+            collection_name = settings.QDRANT_COLLECTION
+
+            # Auto-create the collection if it does not exist
             try:
                 exists = client.collection_exists(collection_name)
             except AttributeError:
@@ -96,23 +44,17 @@ def get_vector_store(embeddings):
                     exists = True
                 except Exception:
                     exists = False
-            
+
             if not exists:
-                print(f"[VectorStore] Qdrant collection '{collection_name}' does not exist. Creating it...")
-                try:
-                    dummy_emb = embeddings.embed_query("test")
-                    vector_size = len(dummy_emb)
-                except Exception:
-                    vector_size = 3072  # Default fallback for gemini-embedding-2
-                
+                print(f"[VectorStore] Collection '{collection_name}' not found. Creating with dim={settings.EMBEDDING_DIM}...")
                 client.create_collection(
                     collection_name=collection_name,
                     vectors_config=qdrant_models.VectorParams(
-                        size=vector_size,
+                        size=settings.EMBEDDING_DIM,
                         distance=qdrant_models.Distance.COSINE
                     )
                 )
-                print(f"[VectorStore] Collection '{collection_name}' created successfully with dimension {vector_size}.")
+                print(f"[VectorStore] Collection '{collection_name}' created successfully.")
 
             return QdrantVectorStore(
                 client=client,
@@ -120,49 +62,43 @@ def get_vector_store(embeddings):
                 embedding=embeddings
             )
         except Exception as e:
-            print(f"[VectorStore] WARNING: Failed to initialize Qdrant Cloud Vector Store ({e}). Falling back to dummy storage to prevent startup crash.")
-            class DummyVectorStore:
-                client = None
-                collection_name = "hayagriva_child_chunks"
-                def as_retriever(self, **kwargs):
-                    class DummyRetriever:
-                        def invoke(self, query):
-                            print("[VectorStore] Retrieval skipped: Qdrant connection failed.")
-                            return []
-                    return DummyRetriever()
-                def get(self):
-                    return {"documents": [], "metadatas": []}
-                def add_texts(self, texts, metadatas=None, **kwargs):
-                    print("[VectorStore] Cannot add texts: Qdrant connection failed.")
-                    return []
-                def add_documents(self, documents, **kwargs):
-                    raise ValueError("Qdrant connection failed. Check your QDRANT_URL and QDRANT_API_KEY environment variables in your Vercel project Settings.")
-            return DummyVectorStore()
+            print(f"[VectorStore] WARNING: Qdrant init failed ({e}). Using DummyVectorStore.")
+            return _make_dummy("Qdrant connection failed. Check QDRANT_URL and QDRANT_API_KEY in Vercel Settings.")
     else:
         if os.getenv("VERCEL") == "1":
-            print("[VectorStore] WARNING: Running on Vercel without Qdrant Cloud credentials. Chroma is unsupported on Vercel.")
-            class DummyVectorStore:
-                client = None
-                collection_name = "hayagriva_child_chunks"
-                def as_retriever(self, **kwargs):
-                    class DummyRetriever:
-                        def invoke(self, query):
-                            print("[VectorStore] Retrieval skipped: Qdrant credentials missing.")
-                            return []
-                    return DummyRetriever()
-                def get(self):
-                    return {"documents": [], "metadatas": []}
-                def add_texts(self, texts, metadatas=None, **kwargs):
-                    print("[VectorStore] Cannot add texts: Vector store is inactive on Vercel (missing Qdrant credentials).")
-                    return []
-                def add_documents(self, documents, **kwargs):
-                    raise ValueError("Qdrant credentials missing. Set QDRANT_URL and QDRANT_API_KEY environment variables in your Vercel project Settings.")
-            return DummyVectorStore()
+            print("[VectorStore] WARNING: Running on Vercel without Qdrant credentials. Uploads disabled.")
+            return _make_dummy("Qdrant credentials missing. Set QDRANT_URL and QDRANT_API_KEY in Vercel Settings.")
 
         print(f"[VectorStore] Initializing Local Chroma Vector Store at: {settings.CHROMA_DB_DIR}")
         from langchain_chroma import Chroma
         return Chroma(
             persist_directory=settings.CHROMA_DB_DIR,
             embedding_function=embeddings,
-            collection_name="hayagriva_child_chunks"
+            collection_name=settings.QDRANT_COLLECTION
         )
+
+
+def _make_dummy(error_message: str):
+    """Returns a DummyVectorStore that safely no-ops retrieval and raises on writes."""
+    class DummyVectorStore:
+        client = None
+        collection_name = settings.QDRANT_COLLECTION
+
+        def as_retriever(self, **kwargs):
+            class DummyRetriever:
+                def invoke(self, query):
+                    print("[VectorStore] Retrieval skipped: vector store is inactive.")
+                    return []
+            return DummyRetriever()
+
+        def get(self):
+            return {"documents": [], "metadatas": []}
+
+        def add_texts(self, texts, metadatas=None, **kwargs):
+            print("[VectorStore] add_texts: vector store is inactive.")
+            return []
+
+        def add_documents(self, documents, **kwargs):
+            raise ValueError(error_message)
+
+    return DummyVectorStore()

@@ -94,26 +94,33 @@ document.addEventListener("DOMContentLoaded", () => {
     // Ingest Directory Trigger (Local scanning backup)
     ingestBtn.addEventListener("click", async () => {
         ingestBtn.disabled = true;
+        const btnTxt = ingestBtn.querySelector(".btn-txt");
+        const origBtnText = btnTxt.innerHTML;
+        btnTxt.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> SCANNING...';
         ingestSpinner.classList.remove("hidden");
-        
+
         try {
             const res = await fetch("/api/ingest", { method: "POST" });
             const data = await res.json();
-            
+
             if (data.status === "success") {
-                const numIngested = data.ingested.length;
-                const numSkipped = data.skipped.length;
-                alert(`Ingestion Successful!\nIndexed: ${numIngested} files\nSkipped (unchanged): ${numSkipped} files`);
+                const n = data.ingested.length;
+                const s = data.skipped.length;
+                btnTxt.innerHTML = `<i class="fa-solid fa-check"></i> ${n} INDEXED, ${s} SKIPPED`;
                 fetchDocuments();
             } else {
-                alert("Ingestion failed: " + data.message);
+                btnTxt.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> SCAN FAILED';
+                console.error("Ingest error:", data.message);
             }
         } catch (err) {
             console.error(err);
-            alert("Error sending ingestion request.");
+            btnTxt.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> NETWORK ERROR';
         } finally {
-            ingestBtn.disabled = false;
             ingestSpinner.classList.add("hidden");
+            setTimeout(() => {
+                btnTxt.innerHTML = origBtnText;
+                ingestBtn.disabled = false;
+            }, 3500);
         }
     });
 
@@ -223,21 +230,43 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Handles the async uploading of files to the backend
     async function handleFileUpload(file) {
-        // Simple file type check
         const allowedExtensions = /(\.pdf|\.txt|\.md)$/i;
         if (!allowedExtensions.exec(file.name)) {
-            alert("Error: Unsupported file format. Please upload a .pdf, .txt, or .md file.");
+            setDropzoneStatus("error", "UNSUPPORTED TYPE", "PDF, TXT or MD only");
+            setTimeout(resetDropzone, 3000);
             return;
         }
 
-        // Show loading state inside the dropzone
-        const originalIcon = dropzone.querySelector(".dropzone-icon").className;
-        const originalText = dropzone.querySelector(".dropzone-text").textContent;
-        const originalSubtext = dropzone.querySelector(".dropzone-subtext").textContent;
+        const iconEl    = dropzone.querySelector(".dropzone-icon");
+        const textEl    = dropzone.querySelector(".dropzone-text");
+        const subtextEl = dropzone.querySelector(".dropzone-subtext");
 
-        dropzone.querySelector(".dropzone-icon").className = "fa-solid fa-spinner fa-spin dropzone-icon";
-        dropzone.querySelector(".dropzone-text").textContent = "INDEXING SCROLL...";
-        dropzone.querySelector(".dropzone-subtext").textContent = file.name;
+        // Capture original state
+        const origIcon    = iconEl.className;
+        const origText    = textEl.textContent;
+        const origSubtext = subtextEl.textContent;
+
+        function resetDropzone() {
+            iconEl.className  = origIcon;
+            textEl.textContent    = origText;
+            subtextEl.textContent = origSubtext;
+            dropzone.classList.remove("dropzone-success", "dropzone-error");
+            dropzone.style.pointerEvents = "auto";
+            fileUploader.value = "";
+        }
+
+        function setDropzoneStatus(state, text, subtext, icon = null) {
+            iconEl.className = (icon || (state === "error" ? "fa-solid fa-triangle-exclamation" : "fa-solid fa-circle-check")) + " dropzone-icon";
+            textEl.textContent    = text;
+            subtextEl.textContent = subtext;
+            dropzone.classList.toggle("dropzone-success", state === "success");
+            dropzone.classList.toggle("dropzone-error",   state === "error");
+        }
+
+        // Loading state
+        iconEl.className      = "fa-solid fa-spinner fa-spin dropzone-icon";
+        textEl.textContent    = "INDEXING SCROLL...";
+        subtextEl.textContent = file.name;
         dropzone.style.pointerEvents = "none";
 
         const formData = new FormData();
@@ -251,21 +280,20 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await response.json();
 
             if (data.status === "success") {
-                alert(`File '${file.name}' indexed successfully!\nGenerated: ${data.chunks} child vectors.`);
+                setDropzoneStatus("success", "INDEXED!", `${data.chunks} vectors · ${file.name}`);
                 fetchDocuments();
+                setTimeout(resetDropzone, 4000);
             } else {
-                alert(`Upload failed: ${data.message}`);
+                // Show the server error message inline
+                const msg = data.message || "Unknown error";
+                setDropzoneStatus("error", "UPLOAD FAILED", msg.length > 60 ? msg.slice(0, 57) + "…" : msg);
+                console.error("Upload failed:", msg);
+                setTimeout(resetDropzone, 6000);
             }
         } catch (err) {
-            console.error("Upload error:", err);
-            alert("Error communicating with file upload API.\n\nNote: If you are uploading a very large document (e.g. 50+ pages), it has likely timed out Vercel's 10-second serverless execution window. Please upload shorter documents, or run ingestion locally and commit/push the pre-compiled database.");
-        } finally {
-            // Reset dropzone UI
-            dropzone.querySelector(".dropzone-icon").className = originalIcon;
-            dropzone.querySelector(".dropzone-text").textContent = originalText;
-            dropzone.querySelector(".dropzone-subtext").textContent = originalSubtext;
-            dropzone.style.pointerEvents = "auto";
-            fileUploader.value = ""; // Clear file selector
+            console.error("Upload network error:", err);
+            setDropzoneStatus("error", "NETWORK ERROR", "Check console for details");
+            setTimeout(resetDropzone, 5000);
         }
     }
 

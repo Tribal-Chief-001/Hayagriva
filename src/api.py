@@ -1,7 +1,7 @@
 import json
 import os
-from fastapi import FastAPI, Request, UploadFile, File
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,7 +11,6 @@ from src.rag_engine import RAGEngine
 
 app = FastAPI(title="Hayagriva API", description="Hybrid RAG Knowledge Engine API")
 
-# Add CORS Middleware to support development workflows
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,16 +19,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Instantiate the shared RAG engine
+# Shared RAG engine instance
 rag_engine = RAGEngine()
+
 
 class ChatRequest(BaseModel):
     message: str
     session_id: str
 
+
+# ---------------------------------------------------------------------------
+# System Status
+# ---------------------------------------------------------------------------
+
 @app.get("/api/status")
 def get_status():
-    """Returns the operational status and mode of the RAG engine."""
+    """Returns the operational status and configuration of the RAG engine."""
     return {
         "status": "online",
         "mode": "Cloud Mode (Gemini)" if settings.is_cloud_mode else "Local Mode (Ollama)",
@@ -42,55 +47,121 @@ def get_status():
         }
     }
 
+
+# ---------------------------------------------------------------------------
+# Chat (streaming SSE)
+# ---------------------------------------------------------------------------
+
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    """Streams RAG tokens and citation metadata using Server-Sent Events (SSE)."""
+    """Streams RAG tokens and citation metadata using Server-Sent Events."""
     async def sse_generator():
-        for event in rag_engine.query(request.message, request.session_id):
-            yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
-            
+        try:
+            for event in rag_engine.query(request.message, request.session_id):
+                yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
+        except Exception as e:
+            yield f"event: token\ndata: {json.dumps(f'[Server error: {e}]')}\n\n"
+            yield "event: done\ndata: \"\"\n\n"
+
     return StreamingResponse(sse_generator(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Document Upload
+# ---------------------------------------------------------------------------
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Handles dynamic user file uploads, parsing and storing them in the vector database."""
+    """
+    Accepts a PDF, TXT, or MD file upload, chunks it, and indexes it into
+    the vector store. Returns JSON with chunk count on success.
+    """
+    # Validate extension before reading bytes
+    allowed = {".pdf", ".txt", ".md"}
+    suffix = os.path.splitext(file.filename or "")[1].lower()
+    if suffix not in allowed:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": f"Unsupported file type '{suffix}'. Upload a .pdf, .txt, or .md file."}
+        )
+
     try:
         file_bytes = await file.read()
+        if not file_bytes:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "The uploaded file is empty."}
+            )
+
         result = ingest_document_bytes(file_bytes, file.filename)
-        
+
         if result.get("status") == "success":
-            # Refresh BM25 index with the newly added chunks
-            print(f"[API] Ingestion complete for '{file.filename}'. Refreshing BM25 Retriever index...")
+            print(f"[API] '{file.filename}' ingested. Refreshing BM25 index...")
             rag_engine.refresh_bm25_retriever()
-            
+
         return result
+
+    except ValueError as e:
+        # Known user-facing errors (bad file, empty PDF, wrong credentials…)
+        return JSONResponse(
+            status_code=422,
+            content={"status": "error", "message": str(e)}
+        )
     except Exception as e:
-        return {"status": "error", "message": f"Failed to upload document: {e}"}
+        # Unexpected server errors
+        print(f"[API] Upload error for '{file.filename}': {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Server error during ingestion: {e}"}
+        )
+
+
+# ---------------------------------------------------------------------------
+# Directory Ingest (local / CLI trigger)
+# ---------------------------------------------------------------------------
 
 @app.post("/api/ingest")
 def trigger_ingestion():
-    """Triggers the document scanning and ingestion process."""
-    result = run_ingestion()
-    if result.get("status") == "success" and result.get("ingested"):
-        # Refresh BM25 index with the newly added chunks
-        print("[API] Ingestion complete. Refreshing BM25 Retriever index...")
-        rag_engine.refresh_bm25_retriever()
-    return result
+    """Scans the documents directory and ingests any new/modified files."""
+    try:
+        result = run_ingestion()
+        if result.get("ingested"):
+            print("[API] Directory ingest done. Refreshing BM25...")
+            rag_engine.refresh_bm25_retriever()
+        return result
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
+        )
+
+
+# ---------------------------------------------------------------------------
+# Indexed Documents List
+# ---------------------------------------------------------------------------
 
 @app.get("/api/documents")
 def list_documents():
-    """Returns a list of all currently ingested documents and their hashes."""
-    log = get_ingestion_log()
-    return {
-        "documents": [
-            {"filename": fname, "hash": fhash[:10] + "..."} 
-            for fname, fhash in log.items()
-        ]
-    }
+    """Returns a list of all ingested documents."""
+    try:
+        log = get_ingestion_log()
+        return {
+            "documents": [
+                {"filename": fname, "hash": fhash[:10] + "..."}
+                for fname, fhash in log.items()
+            ]
+        }
+    except Exception as e:
+        return {"documents": [], "error": str(e)}
 
-# Mount static folder for frontend asset delivery
+
+# ---------------------------------------------------------------------------
+# Static Frontend
+# ---------------------------------------------------------------------------
+
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
 
 @app.get("/")
 def serve_index():
@@ -98,4 +169,4 @@ def serve_index():
     index_path = os.path.join("static", "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
-    return {"message": "Welcome to Hayagriva. Create static/index.html to view the web client."}
+    return {"message": "Welcome to Hayagriva. Place static/index.html to enable the web client."}
