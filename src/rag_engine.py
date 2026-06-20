@@ -209,7 +209,14 @@ class RAGEngine:
         )
         try:
             response = llm.invoke(prompt)
-            lines = [line.strip().lstrip("-*1234567890. ") for line in response.content.strip().split("\n") if line.strip()]
+            
+            content = response.content
+            if isinstance(content, list):
+                content = "".join([b.get("text", "") if isinstance(b, dict) else str(b) for b in content])
+            elif not isinstance(content, str):
+                content = str(content)
+                
+            lines = [line.strip().lstrip("-*1234567890. ") for line in content.strip().split("\n") if line.strip()]
             if len(lines) >= 1:
                 print(f"[RAGEngine] Expanded queries: {lines[:3]}")
                 return lines[:3]
@@ -234,7 +241,14 @@ class RAGEngine:
         )
         try:
             res = llm.invoke(prompt)
-            decision = res.content.strip().lower()
+            
+            content = res.content
+            if isinstance(content, list):
+                content = "".join([b.get("text", "") if isinstance(b, dict) else str(b) for b in content])
+            elif not isinstance(content, str):
+                content = str(content)
+                
+            decision = content.strip().lower()
             print(f"[RAGEngine] Grader decision for '{query}': {decision}")
             return "yes" in decision
         except Exception as e:
@@ -336,7 +350,13 @@ class RAGEngine:
             yield {"event": "status", "data": "Generating response..."}
             print(f"[RAGEngine] Streaming LLM response for: {main_query}")
             for chunk in llm.stream(final_prompt):
-                token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                token = chunk.content if hasattr(chunk, "content") else chunk
+                
+                if isinstance(token, list):
+                    token = "".join([b.get("text", "") if isinstance(b, dict) else str(b) for b in token])
+                elif not isinstance(token, str):
+                    token = str(token)
+                    
                 full_response += token
                 yield {"event": "token", "data": token}
         except Exception as e:
