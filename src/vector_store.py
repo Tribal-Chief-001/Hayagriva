@@ -1,14 +1,58 @@
 import os
 from src.config import settings
+from langchain_core.embeddings import Embeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+
+class FallbackGeminiEmbeddings(Embeddings):
+    """
+    Wrapper around GoogleGenerativeAIEmbeddings that automatically falls back
+    from gemini-embedding-2 to gemini-embedding-001 if the daily quota is exhausted.
+    """
+    def __init__(self, google_api_key: str, model_primary: str = "gemini-embedding-2", model_fallback: str = "gemini-embedding-001"):
+        self.google_api_key = google_api_key
+        self.model_primary = model_primary
+        self.model_fallback = model_fallback
+        
+        # Initialize primary and fallback embedding models
+        self.primary_emb = GoogleGenerativeAIEmbeddings(model=self.model_primary, google_api_key=self.google_api_key)
+        self.fallback_emb = GoogleGenerativeAIEmbeddings(model=self.model_fallback, google_api_key=self.google_api_key)
+        self._use_fallback = False
+
+    def _embed_with_fallback(self, func_name: str, *args, **kwargs):
+        if self._use_fallback:
+            return getattr(self.fallback_emb, func_name)(*args, **kwargs)
+
+        try:
+            return getattr(self.primary_emb, func_name)(*args, **kwargs)
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower():
+                print(f"[Embeddings] Primary embedding model '{self.model_primary}' failed due to quota/rate limit: {e}. Falling back to '{self.model_fallback}'...")
+                self._use_fallback = True
+                try:
+                    return getattr(self.fallback_emb, func_name)(*args, **kwargs)
+                except Exception as fallback_err:
+                    raise ValueError(
+                        "Gemini API rate limit or daily quota exceeded on both primary and fallback models. "
+                        "Free tier is limited to 15 requests/minute and 1,000 requests/day. "
+                        "Please wait a minute before uploading again, or check your Gemini quota/billing settings."
+                    ) from fallback_err
+            else:
+                raise
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self._embed_with_fallback("embed_documents", texts)
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed_with_fallback("embed_query", text)
 
 
 def get_embeddings():
     """Initializes embeddings depending on active mode (Local vs. Cloud)."""
     if settings.is_cloud_mode:
-        print("[VectorStore] Initializing Gemini Embeddings (Cloud Mode)")
-        from langchain_google_genai import GoogleGenerativeAIEmbeddings
-        return GoogleGenerativeAIEmbeddings(
-            model=settings.GEMINI_EMBEDDING_MODEL,
+        print("[VectorStore] Initializing Gemini Fallback Embeddings (Cloud Mode)")
+        return FallbackGeminiEmbeddings(
             google_api_key=settings.GEMINI_API_KEY
         )
     else:

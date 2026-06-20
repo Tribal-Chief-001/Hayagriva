@@ -284,13 +284,9 @@ def ingest_document_bytes(file_bytes: bytes, filename: str) -> dict:
                 api_key=settings.QDRANT_API_KEY,
                 timeout=8
             )
-            from langchain_google_genai import GoogleGenerativeAIEmbeddings
-            raw_emb = GoogleGenerativeAIEmbeddings(
-                model=settings.GEMINI_EMBEDDING_MODEL,
-                google_api_key=settings.GEMINI_API_KEY
-            )
+            raw_emb = get_embeddings()
 
-            BATCH_SIZE = 150
+            BATCH_SIZE = 80
             total_batches = -(-len(content_docs) // BATCH_SIZE)
 
             for i in range(0, len(content_docs), BATCH_SIZE):
