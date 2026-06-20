@@ -178,11 +178,23 @@ document.addEventListener("DOMContentLoaded", () => {
         appendMessage("user", queryText);
         
         // Show Typing Indicator
+        const thinkingTxt = typingIndicator.querySelector(".thinking-txt");
+        thinkingTxt.innerHTML = "Initializing telemetry... <span class='stopwatch'>0.0s</span>";
         typingIndicator.classList.remove("hidden");
         scrollToBottom();
 
+        // Start Live Stopwatch
+        const startTime = Date.now();
+        const timerInterval = setInterval(() => {
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            const stopwatchEl = typingIndicator.querySelector(".stopwatch");
+            if (stopwatchEl) {
+                stopwatchEl.textContent = elapsed + "s";
+            }
+        }, 100);
+
         try {
-            await executeStreamingQuery(queryText);
+            await executeStreamingQuery(queryText, timerInterval);
         } catch (err) {
             console.error("Stream error: ", err);
             appendMessage("assistant", "Apologies, but an issue occurred while querying the server stream.");
@@ -346,7 +358,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Streams RAG response using ReadableStream API
-    async function executeStreamingQuery(message) {
+    async function executeStreamingQuery(message, timerInterval) {
         const response = await fetch("/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -373,6 +385,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     <span class="citations-label">References:</span>
                     <div class="citations-chips"></div>
                 </div>
+                <div class="codex-metrics-bar hidden"></div>
             </div>
         `;
         chatMessages.appendChild(entryDiv);
@@ -381,6 +394,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const msgBody = entryDiv.querySelector(".msg-body");
         const citationsBar = entryDiv.querySelector(".codex-citations-bar");
         const citationsChips = entryDiv.querySelector(".citations-chips");
+        const metricsBar = entryDiv.querySelector(".codex-metrics-bar");
+
+        const thinkingTxt = typingIndicator.querySelector(".thinking-txt");
 
         let responseText = "";
         let sources = [];
@@ -413,7 +429,20 @@ document.addEventListener("DOMContentLoaded", () => {
                             responseText += data;
                             msgBody.innerHTML = formatMarkdown(responseText);
                             scrollToBottom();
+                        } else if (event === "status") {
+                            const elapsed = typingIndicator.querySelector(".stopwatch")?.textContent || "0.0s";
+                            thinkingTxt.innerHTML = `${data} <span class='stopwatch'>${elapsed}</span>`;
+                        } else if (event === "metrics") {
+                            clearInterval(timerInterval);
+                            metricsBar.innerHTML = `
+                                <div class="metrics-item" title="Pipeline Latency"><i class="fa-solid fa-stopwatch"></i> ${data.latency}s</div>
+                                <div class="metrics-item" title="Vector Chunks Retrieved"><i class="fa-solid fa-book-open"></i> ${data.chunks} chunks</div>
+                                <div class="metrics-item" title="Graph DB Traversal"><i class="fa-solid fa-diagram-project"></i> ${data.graph ? "Traversed" : "Skipped"}</div>
+                            `;
+                            metricsBar.classList.remove("hidden");
+                            scrollToBottom();
                         } else if (event === "done") {
+                            clearInterval(timerInterval);
                             break;
                         }
                     } catch (err) {

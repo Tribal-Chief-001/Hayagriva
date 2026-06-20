@@ -887,3 +887,26 @@ body {
 .hidden {
     display: none !important;
 }
+
+/* Telemetry Metrics Bar */
+.codex-metrics-bar {
+    margin-top: 16px;
+    display: flex;
+    gap: 16px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border-color);
+    padding-top: 12px;
+}
+
+.metrics-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.metrics-item i {
+    color: var(--accent-color);
+    opacity: 0.8;
+}

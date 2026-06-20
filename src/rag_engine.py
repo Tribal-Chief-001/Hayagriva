@@ -1,4 +1,6 @@
 import os
+import json
+import time
 import hashlib
 from langchain_core.documents import Document
 from langchain_community.retrievers import BM25Retriever
@@ -211,15 +213,21 @@ class RAGEngine:
 
     def query(self, user_query: str, session_id: str):
         """Executes a query and yields SSE events for FastAPI streaming."""
+        start_time = time.time()
+        
         if session_id not in self.session_histories:
             self.session_histories[session_id] = []
 
+        yield {"event": "status", "data": "Refining user query..."}
         history_text = self.get_history_text(session_id)
         queries = self.condense_and_expand_query(user_query, history_text)
         main_query = queries[0]
 
+        yield {"event": "status", "data": "Scanning Qdrant vector database..."}
         # Retrieve + rerank using Multi-Query Expansion
         retrieved_docs = self.retrieve_context(queries)
+
+        yield {"event": "status", "data": "Cross-Encoder Grading..."}
 
         # Self-Reflective Grader
         is_relevant = self.grade_documents(main_query, retrieved_docs)
@@ -229,6 +237,11 @@ class RAGEngine:
             yield {"event": "token", "data": msg}
             self.session_histories[session_id].append({"role": "user", "content": user_query})
             self.session_histories[session_id].append({"role": "assistant", "content": msg})
+            
+            latency = round(time.time() - start_time, 2)
+            metrics = {"latency": latency, "chunks": 0, "graph": False}
+            yield {"event": "metrics", "data": json.dumps(metrics)}
+            
             yield {"event": "done", "data": ""}
             return
 
@@ -257,6 +270,7 @@ class RAGEngine:
         # -------------------------------------------------------------
         graph_facts = ""
         if settings.is_graph_enabled:
+            yield {"event": "status", "data": "Traversing Neo4j Knowledge Graph..."}
             print(f"[RAGEngine] Querying Neo4j Knowledge Graph...")
             graph = get_graph()
             if graph:
@@ -289,6 +303,7 @@ class RAGEngine:
         full_response = ""
 
         try:
+            yield {"event": "status", "data": "Generating response..."}
             print(f"[RAGEngine] Streaming LLM response for: {main_query}")
             for chunk in llm.stream(final_prompt):
                 token = chunk.content if hasattr(chunk, "content") else str(chunk)
@@ -302,5 +317,14 @@ class RAGEngine:
         # Persist session history
         self.session_histories[session_id].append({"role": "user", "content": user_query})
         self.session_histories[session_id].append({"role": "assistant", "content": full_response})
+
+        # Calculate final metrics
+        latency = round(time.time() - start_time, 2)
+        metrics = {
+            "latency": latency,
+            "chunks": len(retrieved_docs),
+            "graph": bool(graph_facts)
+        }
+        yield {"event": "metrics", "data": json.dumps(metrics)}
 
         yield {"event": "done", "data": ""}
