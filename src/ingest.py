@@ -168,6 +168,22 @@ def delete_document_from_db(filename: str):
             )
             print(f"[Ingest] Document '{filename}' deleted from Qdrant.")
             
+    if settings.is_graph_enabled:
+        from src.graph_store import get_graph
+        graph = get_graph()
+        if graph:
+            try:
+                # Delete Document nodes associated with this file.
+                # Note: We do not delete the underlying Entity nodes (like characters) 
+                # because they might be shared across multiple books!
+                graph.query(
+                    "MATCH (d:Document) WHERE d.source = $filename DETACH DELETE d",
+                    params={"filename": filename}
+                )
+                print(f"[Ingest] Document '{filename}' nodes deleted from Neo4j.")
+            except Exception as e:
+                print(f"[Ingest] Warning: Could not delete from Neo4j: {e}")
+            
     # Remove from local log if exists
     try:
         import json
@@ -211,6 +227,16 @@ def purge_entire_db():
             except Exception:
                 pass
             print(f"[Ingest] Collection '{settings.QDRANT_COLLECTION}' recreated with payload index.")
+
+    if settings.is_graph_enabled:
+        from src.graph_store import get_graph
+        graph = get_graph()
+        if graph:
+            try:
+                graph.query("MATCH (n) DETACH DELETE n")
+                print("[Ingest] Neo4j Graph Database completely purged.")
+            except Exception as e:
+                print(f"[Ingest] Warning: Could not purge Neo4j: {e}")
             
     # Clear local log
     try:
