@@ -290,7 +290,7 @@ def ingest_document_bytes(file_bytes: bytes, filename: str) -> dict:
                 google_api_key=settings.GEMINI_API_KEY
             )
 
-            BATCH_SIZE = 20
+            BATCH_SIZE = 150
             total_batches = -(-len(content_docs) // BATCH_SIZE)
 
             for i in range(0, len(content_docs), BATCH_SIZE):
@@ -300,19 +300,26 @@ def ingest_document_bytes(file_bytes: bytes, filename: str) -> dict:
 
                 texts = [d.page_content for d in batch]
 
-                # Retry with exponential backoff on transient 429s (local mode only)
-                retries, backoff = 5, 10.0
+                # Retry with exponential backoff on transient 429s/RESOURCE_EXHAUSTED
+                retries = 3 if on_vercel else 5
+                backoff = 2.0 if on_vercel else 10.0
                 while True:
                     try:
                         vectors = raw_emb.embed_documents(texts)
                         break
                     except Exception as emb_err:
                         err_str = str(emb_err)
-                        if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str) and retries > 0 and not on_vercel:
+                        if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower()) and retries > 0:
                             print(f"[Ingest] Rate limit hit — retrying batch {batch_num} in {backoff:.0f}s ({retries} retries left)...")
                             time.sleep(backoff)
                             retries -= 1
                             backoff *= 2.0
+                        elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower():
+                            raise ValueError(
+                                "Gemini API rate limit or daily quota exceeded. "
+                                "Free tier is limited to 15 requests/minute and 1,000 requests/day. "
+                                "Please wait a minute before uploading again, or check your Gemini quota/billing settings."
+                            ) from emb_err
                         else:
                             raise
 
@@ -332,10 +339,10 @@ def ingest_document_bytes(file_bytes: bytes, filename: str) -> dict:
                 print(f"[Ingest] Batch {batch_num}/{total_batches} upserted.")
 
                 # Sleep between batches to stay under 100 RPM (Gemini free tier):
-                #   Vercel: 1s sleep → 3s/batch (embed ~2s + sleep 1s) → 40 batches = 120s ≪ 300s
+                #   Vercel: 2s sleep (with BATCH_SIZE=150, we have very few batches)
                 #   Local:  20s sleep → handles large books without hitting rate limit
                 if i + BATCH_SIZE < len(content_docs):
-                    time.sleep(1 if on_vercel else 20)
+                    time.sleep(2 if on_vercel else 20)
 
         else:
             # Local Chroma path — LangChain handles embedding internally
