@@ -24,14 +24,44 @@ def get_vector_store(embeddings):
         print("[VectorStore] Initializing Qdrant Cloud Vector Store")
         from langchain_qdrant import QdrantVectorStore
         import qdrant_client
+        from qdrant_client.http import models as qdrant_models
         try:
             client = qdrant_client.QdrantClient(
                 url=settings.QDRANT_URL,
                 api_key=settings.QDRANT_API_KEY
             )
+            collection_name = "hayagriva_child_chunks"
+            
+            # Check if collection exists; if not, create it automatically
+            try:
+                exists = client.collection_exists(collection_name)
+            except AttributeError:
+                try:
+                    client.get_collection(collection_name)
+                    exists = True
+                except Exception:
+                    exists = False
+            
+            if not exists:
+                print(f"[VectorStore] Qdrant collection '{collection_name}' does not exist. Creating it...")
+                try:
+                    dummy_emb = embeddings.embed_query("test")
+                    vector_size = len(dummy_emb)
+                except Exception:
+                    vector_size = 3072  # Default fallback for gemini-embedding-2
+                
+                client.create_collection(
+                    collection_name=collection_name,
+                    vectors_config=qdrant_models.VectorParams(
+                        size=vector_size,
+                        distance=qdrant_models.Distance.COSINE
+                    )
+                )
+                print(f"[VectorStore] Collection '{collection_name}' created successfully with dimension {vector_size}.")
+
             return QdrantVectorStore(
                 client=client,
-                collection_name="hayagriva_child_chunks",
+                collection_name=collection_name,
                 embedding=embeddings
             )
         except Exception as e:
