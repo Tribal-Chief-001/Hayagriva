@@ -222,6 +222,31 @@ def ingest_document_bytes(file_bytes: bytes, filename: str) -> dict:
         if not child_docs:
             raise ValueError(f"No text could be extracted from '{filename}'. Is the PDF scanned/image-based?")
 
+        # --- Pre-flight quality checks ---
+
+        # 1. Detect DRM-protected or browser-viewer PDFs (e.g. Scribd, Z-Library web viewer)
+        #    These contain error messages instead of real book content.
+        all_text = " ".join(d.page_content for d in child_docs).lower()
+        drm_signals = ["please download", "cannot load this document", "document viewer",
+                       "scribd", "buy the full", "preview only", "sample chapter"]
+        matched_signal = next((s for s in drm_signals if s in all_text), None)
+        if matched_signal and len(all_text) < 2000:
+            raise ValueError(
+                f"'{filename}' appears to be a DRM-protected or browser-preview PDF "
+                f"(detected: '{matched_signal}'). Please download the actual PDF file "
+                f"rather than saving it from a web viewer like Scribd or Z-Library."
+            )
+
+        # 2. Detect scanned / image-only PDFs (very little extractable text per page)
+        total_text_len = sum(len(p.page_content.strip()) for p in pages)
+        avg_chars_per_page = total_text_len / len(pages)
+        if avg_chars_per_page < 80:
+            raise ValueError(
+                f"'{filename}' appears to be a scanned or image-based PDF "
+                f"(avg {avg_chars_per_page:.0f} chars/page, expected >80). "
+                f"Please use a text-based PDF or convert it using OCR first."
+            )
+
         # Filter out log-tagged documents from Qdrant scroll so BM25 ignores them
         content_docs = [d for d in child_docs if d.metadata.get("tag") != _LOG_COLLECTION_TAG]
 
