@@ -3,11 +3,14 @@ uvicorn==0.49.0
 python-dotenv==1.2.2
 langchain-core==1.4.6
 langchain-chroma==1.1.0
+langchain-huggingface==1.2.2
 langchain-community==0.4.2
 langchain-google-genai>=4.0.0
 qdrant-client==1.18.0
 rank-bm25==0.2.2
+sentence-transformers==5.5.1
 pypdf==6.13.2
 pydantic==2.13.4
 cohere==5.5.0
 python-multipart==0.0.32
+langchain-ollama>=0.1.0

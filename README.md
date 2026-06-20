@@ -95,7 +95,7 @@ cd Hayagriva
 # Initialize virtualenv
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-local.txt
 ```
 
 ### 2. Ollama Pull (Local LLM)
