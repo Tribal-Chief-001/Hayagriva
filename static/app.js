@@ -568,53 +568,16 @@ document.addEventListener("DOMContentLoaded", () => {
         );
     }
 
-    // Elegant Regex-based Markdown formatter
+    // Elegant Markdown parser utilizing marked.js
     function formatMarkdown(text) {
+        if (!text) return "";
         // Strip carriage returns first
-        let html = text.replace(/\r/g, "");
-        
-        // Escape HTML
-        html = html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        
-        // Code Blocks
-        html = html.replace(/```([\s\S]*?)```/g, (match, p1) => {
-            return `<pre><code>${p1.trim()}</code></pre>`;
+        const cleanText = text.replace(/\r/g, "");
+        // Configure marked options
+        marked.setOptions({
+            gfm: true,
+            breaks: true
         });
-        
-        // Inline Code
-        html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-        
-        // Bold
-        html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-        
-        // Italic
-        html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-        html = html.replace(/_([^_]+)_/g, "<em>$1</em>");
-
-        // Headings (Block elements) - strips leading spaces, and optional trailing hashes
-        html = html.replace(/^\s*######\s+(.+?)(?:\s*######)?\s*$/gm, "<h6>$1</h6>");
-        html = html.replace(/^\s*#####\s+(.+?)(?:\s*#####)?\s*$/gm, "<h5>$1</h5>");
-        html = html.replace(/^\s*####\s+(.+?)(?:\s*####)?\s*$/gm, "<h4>$1</h4>");
-        html = html.replace(/^\s*###\s+(.+?)(?:\s*###)?\s*$/gm, "<h3>$1</h3>");
-        html = html.replace(/^\s*##\s+(.+?)(?:\s*##)?\s*$/gm, "<h2>$1</h2>");
-        html = html.replace(/^\s*#\s+(.+?)(?:\s*#)?\s*$/gm, "<h1>$1</h1>");
-
-        // Blockquotes
-        html = html.replace(/^&gt;\s+(.+)$/gm, "<blockquote>$1</blockquote>");
-        
-        // Bullet list (match -, *, +)
-        html = html.replace(/^\s*[-*+]\s+(.+)$/gm, "<li>$1</li>");
-        
-        // Ordered list (match 1., 2., etc.)
-        html = html.replace(/^\s*\d+\.\s+(.+)$/gm, "<li>$1</li>");
-        
-        // Line breaks
-        html = html.replace(/\n/g, "<br>");
-        
-        // Cleanup consecutive <br> next to block tags
-        html = html.replace(/(<\/?(h[1-6]|pre|blockquote|li|ul|ol)>)<br>/gi, "$1");
-        html = html.replace(/<br>(<\/?(h[1-6]|pre|blockquote|li|ul|ol)>)/gi, "$1");
-
-        return html;
+        return marked.parse(cleanText);
     }
 });

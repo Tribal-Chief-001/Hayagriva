@@ -812,6 +812,46 @@ body {
     margin-bottom: 8px;
 }
 
+.manuscript-body h1,
+.manuscript-body h2,
+.manuscript-body h3,
+.manuscript-body h4,
+.manuscript-body h5,
+.manuscript-body h6 {
+    font-family: var(--font-serif);
+    font-weight: 600;
+    color: var(--text-title);
+    margin-top: 28px;
+    margin-bottom: 14px;
+    line-height: 1.35;
+}
+
+.manuscript-body h1 { font-size: 24px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; }
+.manuscript-body h2 { font-size: 21px; border-bottom: 1px solid var(--border-color); padding-bottom: 6px; }
+.manuscript-body h3 { font-size: 18px; color: var(--accent-color); }
+.manuscript-body h4 { font-size: 16px; }
+.manuscript-body h5 { font-size: 14px; }
+.manuscript-body h6 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+.manuscript-body p {
+    margin-top: 0;
+    margin-bottom: 16px;
+    line-height: 1.7;
+    color: var(--text-body);
+}
+
+.manuscript-body blockquote {
+    margin: 20px 0;
+    padding: 14px 22px;
+    background: rgba(209, 184, 138, 0.015);
+    border-left: 3px solid var(--accent-color);
+    font-family: var(--font-serif);
+    font-style: italic;
+    color: var(--text-body);
+    border-radius: 0 6px 6px 0;
+}
+
+
 /* Drag-and-Drop Dropzone UI */
 .codex-dropzone {
     margin: 16px 0;
