@@ -15,8 +15,8 @@ class FallbackGeminiEmbeddings(Embeddings):
         self.model_fallback = model_fallback
         
         # Initialize primary and fallback embedding models
-        self.primary_emb = GoogleGenerativeAIEmbeddings(model=self.model_primary, google_api_key=self.google_api_key)
-        self.fallback_emb = GoogleGenerativeAIEmbeddings(model=self.model_fallback, google_api_key=self.google_api_key)
+        self.primary_emb = GoogleGenerativeAIEmbeddings(model=self.model_primary, google_api_key=self.google_api_key, max_retries=0)
+        self.fallback_emb = GoogleGenerativeAIEmbeddings(model=self.model_fallback, google_api_key=self.google_api_key, max_retries=0)
         self._use_fallback = False
 
     def _embed_with_fallback(self, func_name: str, *args, **kwargs):
