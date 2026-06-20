@@ -49,6 +49,11 @@ document.addEventListener("DOMContentLoaded", () => {
         fileUploader.click();
     });
 
+    // Prevent programmatic click from bubbling up to dropzone
+    fileUploader.addEventListener("click", (e) => {
+        e.stopPropagation();
+    });
+
     // File selected from dialog
     fileUploader.addEventListener("change", (e) => {
         if (e.target.files.length > 0) {
@@ -253,7 +258,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (err) {
             console.error("Upload error:", err);
-            alert("Error communicating with file upload API.");
+            alert("Error communicating with file upload API.\n\nNote: If you are uploading a very large document (e.g. 50+ pages), it has likely timed out Vercel's 10-second serverless execution window. Please upload shorter documents, or run ingestion locally and commit/push the pre-compiled database.");
         } finally {
             // Reset dropzone UI
             dropzone.querySelector(".dropzone-icon").className = originalIcon;

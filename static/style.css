@@ -862,3 +862,7 @@ body {
     color: var(--text-muted);
 }
 
+.hidden {
+    display: none !important;
+}
+
